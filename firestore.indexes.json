@@ -1,0 +1,113 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "locationPoints",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "trackingSessionId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "locationPoints",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "trackingSessionId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "locationPoints",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "employeeId", "order": "ASCENDING" },
+        { "fieldPath": "trackingSessionId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "stops",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "trackingSessionId", "order": "ASCENDING" },
+        { "fieldPath": "arrivalTime", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "stops",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "employeeId", "order": "ASCENDING" },
+        { "fieldPath": "trackingSessionId", "order": "ASCENDING" },
+        { "fieldPath": "arrivalTime", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "routeSegments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "trackingSessionId", "order": "ASCENDING" },
+        { "fieldPath": "startTime", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "routeSegments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "employeeId", "order": "ASCENDING" },
+        { "fieldPath": "trackingSessionId", "order": "ASCENDING" },
+        { "fieldPath": "startTime", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "trackingSessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "employeeId", "order": "ASCENDING" },
+        { "fieldPath": "startTime", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "attendanceLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "employeeId", "order": "ASCENDING" },
+        { "fieldPath": "loginTime", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "attendanceLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "employeeId", "order": "ASCENDING" },
+        { "fieldPath": "loginTime", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "fuelRates",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fuelType", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" },
+        { "fieldPath": "effectiveDate", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "advances",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "employeeId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "routeSegments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "reviewStatus", "order": "ASCENDING" },
+        { "fieldPath": "startTime", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

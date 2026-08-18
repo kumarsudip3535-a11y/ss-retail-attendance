@@ -1,0 +1,255 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myPhone() {
+      return request.auth.token.phone_number;
+    }
+
+    // Resolves the signed-in user's own employees/{id} document ID via
+    // the employeeLookup index (doc IDs in `employees` are auto-generated,
+    // not tied to phone number, so a direct get() isn't possible without
+    // this index). get()/exists() calls made from within a rule are not
+    // themselves subject to security rules, so this does not create a
+    // circular dependency with the employeeLookup rule below.
+    function myEmployeeDocId() {
+      return get(/databases/$(database)/documents/employeeLookup/$(myPhone())).data.employeeDocId;
+    }
+
+    function hasLookupEntry() {
+      return isSignedIn() && exists(/databases/$(database)/documents/employeeLookup/$(myPhone()));
+    }
+
+    function isAdmin() {
+      return hasLookupEntry() &&
+        get(/databases/$(database)/documents/employees/$(myEmployeeDocId())).data.role == 'admin';
+    }
+
+    function isSelf(employeeDocId) {
+      return hasLookupEntry() && myEmployeeDocId() == employeeDocId;
+    }
+
+    match /employees/{employeeId} {
+      // Employees can read their own record; admins can read/write any.
+      // Employees can never write to this collection directly (from any
+      // client code path in the app), which is what prevents them from
+      // changing their own role, office coordinates, or geofence radius.
+      allow read: if isSignedIn() && (isSelf(employeeId) || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /employeeLookup/{phone} {
+      // The app itself reads a user's own lookup entry during login (to
+      // resolve "who am I" before we even know their role), so self-read
+      // must be allowed here — not just admin. Only admins may write.
+      allow read: if isSignedIn() && (phone == myPhone() || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /attendanceLogs/{logId} {
+      allow read: if isSignedIn() && (isSelf(resource.data.employeeId) || isAdmin());
+      allow create: if isSignedIn() && (isSelf(request.resource.data.employeeId) || isAdmin());
+      allow update: if isSignedIn() && (isSelf(resource.data.employeeId) || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // --- Phase T3: Live Tracking / Route History ---
+    //
+    // Design principle for this whole block (spec section 8): employees
+    // may start/stop their own tracking session and contribute raw GPS
+    // points to it, but the *derived* data — stops, route segments, daily
+    // summaries, and the session's own aggregate totals — is written
+    // exclusively by the Cloud Functions aggregation pipeline, which uses
+    // the Admin SDK and is therefore not subject to these rules at all.
+    // No rule below grants a client (employee OR admin) permission to
+    // write those derived fields, which is what makes "prevent employees
+    // from manually changing GPS travel records" actually true rather
+    // than just a UI convention.
+
+    match /trackingSessions/{sessionId} {
+      allow read: if isSignedIn() && (isSelf(resource.data.employeeId) || isAdmin());
+
+      // Starting a session: only the employee it belongs to, and only in
+      // the fresh "just started, nothing computed yet" shape — this stops
+      // a client from ever seeding totalDistanceKm/totalPoints itself.
+      allow create: if isSignedIn() && isSelf(request.resource.data.employeeId) &&
+        request.resource.data.status == 'active' &&
+        request.resource.data.endTime == null &&
+        request.resource.data.totalDistanceKm == null &&
+        request.resource.data.totalPoints == 0;
+
+      // Ending a session: the owning employee may flip it to completed
+      // and stamp endTime, nothing else — the aggregate fields
+      // (totalDistanceKm/totalPoints) are filled in afterward by the
+      // Cloud Function trigger, via the Admin SDK. Admins may correct any
+      // field directly (e.g. force-closing a stuck session).
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (isSelf(resource.data.employeeId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['endTime', 'status']) &&
+          request.resource.data.status == 'completed')
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    match /locationPoints/{pointId} {
+      allow read: if isSignedIn() && (isSelf(resource.data.employeeId) || isAdmin());
+
+      // A point may only be written by the employee it belongs to, into a
+      // session that (a) is actually theirs and (b) is still active —
+      // this is what stops tracking data from ever being written outside
+      // an authorized working/tracking period, per spec section 3.
+      allow create: if isSignedIn() && isSelf(request.resource.data.employeeId) &&
+        get(/databases/$(database)/documents/trackingSessions/$(request.resource.data.trackingSessionId)).data.employeeId == myEmployeeDocId() &&
+        get(/databases/$(database)/documents/trackingSessions/$(request.resource.data.trackingSessionId)).data.status == 'active';
+
+      // Immutable once written — not even an admin can edit a GPS
+      // reading, only delete a bad one outright (leaves an audit trail
+      // gap of exactly one action, rather than a silently-edited value).
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    match /stops/{stopId} {
+      allow read: if isSignedIn() && (isSelf(resource.data.employeeId) || isAdmin());
+      allow create: if false; // Cloud Functions only (Admin SDK bypasses rules)
+
+      // Phase T7: the owning employee (or an admin) may re-tag how a stop
+      // should be treated for reimbursement — e.g. correcting an
+      // auto-detected stop from "official" to "personal" — plus the
+      // optional context fields that go with it. Every other field
+      // (location, timing, duration) stays Cloud-Functions-only, so a
+      // client can reclassify a stop but never rewrite what actually
+      // happened.
+      allow update: if isSignedIn() && (isSelf(resource.data.employeeId) || isAdmin()) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['classification', 'customerName', 'purpose']);
+
+      allow delete: if isAdmin();
+    }
+
+    match /routeSegments/{segmentId} {
+      allow read: if isSignedIn() && (isSelf(resource.data.employeeId) || isAdmin());
+      allow create: if false; // Cloud Functions only
+
+      // Phase T7: the segment's own employee (or an admin) may re-tag its
+      // reimbursement classification — only that field moves via this path.
+      //
+      // Phase T11: reviewStatus (an admin's verified/excluded call after a
+      // GPS-quality review — see SegmentReviewStatus's doc comment in
+      // src/types/tracking.ts) is a deliberately separate, admin-only path.
+      // Letting an employee mark their own flagged segment "verified"
+      // would defeat the point of having a second set of eyes on it.
+      allow update: if isSignedIn() && (
+        (
+          (isSelf(resource.data.employeeId) || isAdmin()) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['classification'])
+        ) ||
+        (
+          isAdmin() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reviewStatus'])
+        )
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    match /dailyRouteSummaries/{summaryId} {
+      allow read: if isSignedIn() && (isSelf(resource.data.employeeId) || isAdmin());
+      allow write: if false; // Cloud Functions only
+    }
+
+    // Single shared config doc (interval, stop-detection thresholds) —
+    // every signed-in employee needs to read it (it drives their own
+    // device's collection interval), only admins may change it.
+    match /trackingConfig/{configId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // --- Phase T6: Vehicle Master & Fuel Rate Management ---
+    //
+    // Both collections are admin-configured reference data, not owned by
+    // any one employee — same read-all/write-admin-only shape as
+    // trackingConfig above. Every signed-in employee can read them (an
+    // employee needs to see their own assigned vehicle, and upcoming
+    // expense-claim screens need to read fuel rates client-side); only
+    // admins may create/edit/deactivate either one.
+    match /vehicles/{vehicleId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /fuelRates/{rateId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // --- Phase T9: Travel Claim, Employee Confirmation & Manager Approval ---
+    //
+    // Document ID is the trackingSessionId itself (see travelClaimService.ts)
+    // so there can only ever be one claim per session, and every lookup is a
+    // direct get() by ID rather than a query — the T5 list-query
+    // rule-provability issue doesn't apply to any of the reads/writes below.
+    match /travelClaims/{claimId} {
+      // resource == null covers the very first visit to a session's Travel
+      // Claim screen, before any draft exists yet — getClaimForSession does
+      // a getDoc() by ID to check, and a rule that references resource.data
+      // without first guarding for a missing document errors out on a
+      // nonexistent doc, which Firestore treats as a denial rather than
+      // "not found". Allowing that case leaks nothing (there's no data to
+      // read); once createDraftClaim() creates the doc, every later read
+      // goes through the real isSelf()/isAdmin() check as normal.
+      allow read: if isSignedIn() && (resource == null || isSelf(resource.data.employeeId) || isAdmin());
+
+      // The draft is auto-created the first time either the employee or an
+      // admin opens the claim screen for a completed session — see
+      // createDraftClaim's doc comment for why this replaced a Cloud
+      // Function trigger. Must start life as an untouched draft: no
+      // approval fields set yet.
+      allow create: if isSignedIn() && (isAdmin() || isSelf(request.resource.data.employeeId)) &&
+        request.resource.data.status == 'draft' &&
+        request.resource.data.approvedBy == null &&
+        request.resource.data.approvedAt == null;
+
+      // The owning employee may edit/submit their own claim only while
+      // it's still in an editable state (draft, or sent back for
+      // corrections), and only to move it to draft or submitted — never
+      // approved/rejected, and never touch the approval fields directly.
+      // An admin may update any claim in any state (approve/reject/send
+      // back, or a direct correction).
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (isSelf(resource.data.employeeId) &&
+          resource.data.status in ['draft', 'sent_back'] &&
+          request.resource.data.status in ['draft', 'submitted'] &&
+          request.resource.data.approvedBy == resource.data.approvedBy &&
+          request.resource.data.approvedAt == resource.data.approvedAt &&
+          request.resource.data.rejectionReason == resource.data.rejectionReason)
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // --- Phase T10: Employee Advances & Payroll ---
+    //
+    // Both collections are salary/cash-advance data, which the user only
+    // ever talked about from the admin's side (giving advances, running
+    // payroll) — unlike travelClaims there's no employee-facing screen for
+    // this in T10, so both stay admin read+write only rather than adding
+    // an isSelf() branch for data nothing in the app currently displays to
+    // an employee. Revisit if an employee-facing payslip view gets asked
+    // for later.
+    match /advances/{advanceId} {
+      allow read, write: if isAdmin();
+    }
+    match /payrollRecords/{recordId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

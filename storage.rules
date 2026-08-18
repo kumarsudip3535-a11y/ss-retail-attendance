@@ -1,0 +1,60 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Mirrors firestore.rules' isAdmin()/isSelf() helpers exactly, using
+    // the same firestore.get()/firestore.exists() cross-service calls
+    // Storage Rules v2 supports — so authorization here is driven by the
+    // same `employees`/`employeeLookup` data, not duplicated logic.
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myPhone() {
+      return request.auth.token.phone_number;
+    }
+
+    function myEmployeeDocId() {
+      return firestore.get(/databases/(default)/documents/employeeLookup/$(myPhone())).data.employeeDocId;
+    }
+
+    function hasLookupEntry() {
+      return isSignedIn() && firestore.exists(/databases/(default)/documents/employeeLookup/$(myPhone()));
+    }
+
+    function isAdmin() {
+      return hasLookupEntry() &&
+        firestore.get(/databases/(default)/documents/employees/$(myEmployeeDocId())).data.role == 'admin';
+    }
+
+    function isSelf(employeeDocId) {
+      return hasLookupEntry() && myEmployeeDocId() == employeeDocId;
+    }
+
+    // Employee photos — admin manages employee records (Phase 9), so only
+    // an admin may write here, matching the `employees` Firestore
+    // collection's own write rule. This closes out the open item flagged
+    // during Phase 9's review: no storage.rules file existed at all,
+    // despite code comments referencing "the temporary Storage rule added
+    // alongside this" as if one did.
+    match /employee-photos/{employeeId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Phase T9: travel claim receipts. Path is keyed by employeeId (not
+    // read from a Firestore document the way firestore.rules can via
+    // resource.data) so isSelf() checks directly against the path segment
+    // itself — the claim's own employee, or an admin, may read/write.
+    match /travel-claim-receipts/{employeeId}/{claimId}/{fileName} {
+      allow read: if isSignedIn() && (isSelf(employeeId) || isAdmin());
+      allow write: if isSignedIn() && (isSelf(employeeId) || isAdmin());
+    }
+
+    // Default deny — nothing else in the bucket is reachable from client
+    // code, so a typo'd/forgotten path fails closed instead of open.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
