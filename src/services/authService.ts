@@ -147,5 +147,6 @@ export async function findEmployeeByPhone(
       DEFAULT_ALLOWED_REIMBURSEMENT_METHODS,
     baseSalary: (data.baseSalary as number | undefined) ?? 0,
     trackingEnabled: (data.trackingEnabled as boolean | undefined) ?? DEFAULT_TRACKING_ENABLED,
+    email: (data.email as string | null | undefined) ?? null,
   }
 }

@@ -68,6 +68,11 @@ export async function getAllEmployees(): Promise<Employee[]> {
         DEFAULT_ALLOWED_REIMBURSEMENT_METHODS,
       baseSalary: (data.baseSalary as number | undefined) ?? 0,
       trackingEnabled: (data.trackingEnabled as boolean | undefined) ?? DEFAULT_TRACKING_ENABLED,
+      // Phase T14 follow-up: no employee record has this field until an
+      // admin explicitly sets one via EmployeeFormModal, so this is `null`
+      // (not a fallback string) for the entire existing roster — that's
+      // expected and just means no welcome email was ever sent for them.
+      email: (data.email as string | null | undefined) ?? null,
     } as Employee
   })
 }
@@ -103,6 +108,7 @@ export async function getEmployeeById(id: string): Promise<Employee | null> {
       DEFAULT_ALLOWED_REIMBURSEMENT_METHODS,
     baseSalary: (data.baseSalary as number | undefined) ?? 0,
     trackingEnabled: (data.trackingEnabled as boolean | undefined) ?? DEFAULT_TRACKING_ENABLED,
+    email: (data.email as string | null | undefined) ?? null,
   } as Employee
 }
 

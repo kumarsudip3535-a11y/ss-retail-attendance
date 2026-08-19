@@ -1,4 +1,5 @@
-import { onDocumentUpdated } from 'firebase-functions/v2/firestore'
+import { onDocumentUpdated, onDocumentCreated } from 'firebase-functions/v2/firestore'
+import { defineSecret } from 'firebase-functions/params'
 import { logger } from 'firebase-functions'
 import { initializeApp } from 'firebase-admin/app'
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore'
@@ -9,6 +10,10 @@ import { DEFAULT_TRACKING_CONFIG, type TrackingConfigDoc } from './config'
 
 initializeApp()
 const db = getFirestore()
+
+// Set via: firebase functions:secrets:set RESEND_API_KEY (run by the user
+// in their own terminal — the raw key must never be pasted into chat).
+const resendApiKey = defineSecret('RESEND_API_KEY')
 
 /** Speed above which a distance jump is treated as a GPS glitch, not real movement. */
 const IMPLAUSIBLE_SPEED_KMH = 180
@@ -406,5 +411,78 @@ export const onTrackingSessionClosed = onDocumentUpdated(
     logger.info(
       `[tracking] Session ${sessionId} aggregated: ${totalDistanceKm}km, ${writtenStops.length} stops, ${points.length} points.`
     )
+  }
+)
+
+/**
+ * Phase T14 follow-up: fires once when a new employees/{employeeId} doc is
+ * created (admin adds someone via Employee Management), and sends a
+ * one-time "welcome aboard" email if — and only if — the admin filled in
+ * an email address for that employee (Employee.email is optional; see its
+ * doc comment in src/types/employee.ts). A no-op for the common case of no
+ * email on file, and never blocks/undoes employee creation on failure —
+ * this runs strictly after the employee doc already exists, and any error
+ * here (bad API key, Resend outage, etc.) is only logged, never surfaced
+ * to the admin who's mid-way through an unrelated Employee Management
+ * screen.
+ *
+ * Uses Node 20's built-in global fetch() to call Resend's REST API
+ * directly rather than adding the `resend` npm package as a dependency —
+ * keeps functions/package.json's dependency footprint unchanged, matching
+ * this codebase's existing preference for avoiding unnecessary
+ * dependencies (see offlineQueueDb.ts's raw-IndexedDB-wrapper precedent on
+ * the client side).
+ *
+ * Sends from onboarding@resend.dev, Resend's shared test sender that works
+ * immediately with no domain verification — good enough for pilot rollout;
+ * verifying a custom sending domain is a deliberately deferred follow-up
+ * once the team wants production-grade deliverability to arbitrary real
+ * inboxes.
+ */
+export const onEmployeeCreated = onDocumentCreated(
+  {
+    document: 'employees/{employeeId}',
+    secrets: [resendApiKey],
+    timeoutSeconds: 30,
+    memory: '256MiB',
+  },
+  async (event) => {
+    const employeeId = event.params.employeeId
+    const data = event.data?.data()
+    if (!data) return
+
+    const email = data.email as string | null | undefined
+    const name = (data.name as string | undefined) ?? 'there'
+
+    if (!email) {
+      logger.info(`[onboarding] Employee ${employeeId} has no email on file — skipping welcome email.`)
+      return
+    }
+
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey.value()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: 'SS Retail Services <onboarding@resend.dev>',
+          to: [email],
+          subject: 'Congratulations, you are on board at SS Retail Services!',
+          html: `<p>Hi ${name},</p><p>Congratulations, you are on board at SS Retail Services! We're glad to have you with us.</p>`,
+        }),
+      })
+
+      if (!response.ok) {
+        const body = await response.text()
+        logger.error(`[onboarding] Resend API returned ${response.status} for employee ${employeeId}: ${body}`)
+        return
+      }
+
+      logger.info(`[onboarding] Welcome email sent to ${email} for employee ${employeeId}.`)
+    } catch (err) {
+      logger.error(`[onboarding] Failed to send welcome email for employee ${employeeId}:`, err)
+    }
   }
 )

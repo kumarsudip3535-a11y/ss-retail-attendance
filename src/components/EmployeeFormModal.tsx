@@ -58,6 +58,11 @@ export default function EmployeeFormModal({
   const [trackingEnabled, setTrackingEnabled] = useState(
     employee?.trackingEnabled ?? true
   )
+  // Phase T14 follow-up: optional — see Employee.email's doc comment.
+  // Empty string in this input means "no email on file", which baseData
+  // below normalizes to `null` before saving (never an empty string in
+  // Firestore, matching how assignedVehicleId/photoUrl already do this).
+  const [email, setEmail] = useState(employee?.email ?? '')
   const [photoFile, setPhotoFile] = useState<File | null>(null)
   const [photoPreview, setPhotoPreview] = useState<string | null>(
     employee?.photoUrl || null
@@ -97,6 +102,8 @@ export default function EmployeeFormModal({
     const salary = parseFloat(baseSalary)
     if (!Number.isFinite(salary) || salary < 0)
       return 'Base salary must be a non-negative number.'
+    if (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
+      return 'Enter a valid email address, or leave it blank.'
     return null
   }
 
@@ -124,6 +131,7 @@ export default function EmployeeFormModal({
         allowedReimbursementMethods,
         baseSalary: parseFloat(baseSalary),
         trackingEnabled,
+        email: email.trim() || null,
       }
 
       if (isEditing) {
@@ -313,6 +321,23 @@ export default function EmployeeFormModal({
               module for this employee — for a staged pilot rollout. When off,
               Punch In records attendance as normal but doesn't start GPS
               tracking. Attendance itself is never affected either way.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">
+              Email (optional)
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="employee@example.com"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-500"
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              Not used for login — phone/OTP only. If set, a welcome email is
+              sent automatically when this employee is first added.
             </p>
           </div>
 

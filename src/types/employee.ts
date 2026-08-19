@@ -52,6 +52,18 @@ export interface Employee {
    * AttendanceHistoryPage.tsx.
    */
   trackingEnabled: boolean
+  /**
+   * Phase T14 follow-up: optional, admin-entered contact email — not used
+   * for login (phone/OTP remains the only auth method), only for the
+   * onboarding welcome email a new Cloud Function sends when this record
+   * is first created (see functions/src/index.ts's onEmployeeCreated).
+   * Deliberately optional rather than required: existing employee records
+   * have no email on file at all, and adding one is a per-employee admin
+   * action, not a retroactive migration. `null`/missing simply means no
+   * welcome email gets sent for that employee — every other feature is
+   * unaffected.
+   */
+  email?: string | null
 }
 
 /** Shape used when creating/editing an employee from the admin UI (no id yet) */
