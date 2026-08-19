@@ -11,10 +11,8 @@ export default function DashboardHeader() {
     <header className="bg-white border-b border-slate-200">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
         <div>
-          <p className="text-sm font-semibold text-brand-700">
-            SS Retail Services
-          </p>
-          <p className="text-xs text-slate-400">Attendance System</p>
+          <img src="/logo.svg" alt="SS Retail Services" className="h-8 w-auto" />
+          <p className="text-xs text-slate-400 mt-0.5">Attendance System</p>
         </div>
 
         <div className="flex items-center gap-3">

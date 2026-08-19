@@ -137,10 +137,12 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm rounded-2xl bg-white shadow-sm border border-slate-200 p-8">
-        <h1 className="text-2xl font-semibold text-brand-700">
-          SS Retail Attendance
-        </h1>
-        <p className="mt-1 text-sm text-slate-500">
+        <img
+          src="/logo.svg"
+          alt="SS Retail Services"
+          className="h-10 w-auto mx-auto block"
+        />
+        <p className="mt-2 text-sm text-slate-500 text-center">
           Employee Attendance Management System
         </p>
 
