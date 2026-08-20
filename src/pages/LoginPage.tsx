@@ -121,7 +121,26 @@ export default function LoginPage() {
       // lookup resolves.
     } catch (error) {
       console.error('[LoginPage] verifyOtp failed:', error)
-      setErrorMessage('Incorrect OTP. Please try again.')
+      // Previously this always showed "Incorrect OTP", even when the real
+      // cause was something else entirely (the code expiring, too many
+      // attempts, a flaky mobile connection) — which is actively
+      // misleading when someone reports "I entered the right code and it
+      // still says incorrect", since a wrong code was never actually the
+      // problem. Firebase's phone-auth SDK throws a FirebaseError with a
+      // specific `.code`; branch on it so the message people see actually
+      // matches what happened.
+      const code = (error as { code?: string })?.code
+      if (code === 'auth/code-expired') {
+        setErrorMessage('This code has expired. Please request a new OTP.')
+      } else if (code === 'auth/too-many-requests') {
+        setErrorMessage('Too many attempts. Please wait a bit before trying again.')
+      } else if (code === 'auth/network-request-failed') {
+        setErrorMessage('Network error — check your connection and try again.')
+      } else if (code === 'auth/invalid-verification-code') {
+        setErrorMessage('Incorrect OTP. Please check the code and try again.')
+      } else {
+        setErrorMessage('Something went wrong verifying the code. Please try again.')
+      }
     } finally {
       setSubmitting(false)
     }
@@ -205,6 +224,13 @@ export default function LoginPage() {
                 placeholder="123456"
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
+                // Lets mobile browsers offer the *actual latest* SMS code
+                // as a one-tap autofill suggestion, instead of the person
+                // manually switching to Messages and copying a code by
+                // hand — which is an easy way to accidentally copy an
+                // older OTP still sitting in the thread from a previous
+                // attempt and paste in a code that's already expired.
+                autoComplete="one-time-code"
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-500 tracking-widest"
               />
               <p className="mt-1 text-xs text-slate-400">

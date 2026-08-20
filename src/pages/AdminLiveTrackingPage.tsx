@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import icon2x from 'leaflet/dist/images/marker-icon-2x.png'
 import icon from 'leaflet/dist/images/marker-icon.png'
@@ -27,6 +27,29 @@ L.Icon.Default.mergeOptions({
 
 /** India centroid — only used as the map center before any live marker exists. */
 const FALLBACK_CENTER: [number, number] = [20.5937, 78.9629]
+
+/**
+ * react-leaflet's <MapContainer center=/zoom= props only take effect on
+ * the map's *initial* mount — they're read once to construct the
+ * underlying Leaflet map instance, and changing them on a later render
+ * does nothing (this trips up almost everyone who's used react-leaflet;
+ * it's not obvious from the prop names). That's exactly why live tracking
+ * looked broken: the map mounts first with FALLBACK_CENTER/zoom 5 (before
+ * any GPS point has arrived), and once the first marker actually shows up
+ * a few seconds later, `mapCenter` changes but the map itself never pans
+ * or zooms to it — it just sits zoomed out on all of India with a
+ * marker easy to miss, looking like "tracking isn't showing" even though
+ * the data pipeline underneath is working fine. This child component
+ * lives inside <MapContainer>, pulls the live map instance via useMap(),
+ * and explicitly calls `.setView()` whenever center/zoom actually change.
+ */
+function RecenterMap({ center, zoom }: { center: [number, number]; zoom: number }) {
+  const map = useMap()
+  useEffect(() => {
+    map.setView(center, zoom)
+  }, [map, center, zoom])
+  return null
+}
 
 interface LiveMarker {
   sessionId: string
@@ -113,6 +136,8 @@ export default function AdminLiveTrackingPage() {
     return FALLBACK_CENTER
   }, [markers])
 
+  const mapZoom = markers.length > 0 ? 12 : 5
+
   const headline = !sessionsLoaded
     ? 'Loading…'
     : activeSessions.length === 0
@@ -161,9 +186,10 @@ export default function AdminLiveTrackingPage() {
               )}
               <MapContainer
                 center={mapCenter}
-                zoom={markers.length > 0 ? 12 : 5}
+                zoom={mapZoom}
                 style={{ height: '70vh', width: '100%' }}
               >
+                <RecenterMap center={mapCenter} zoom={mapZoom} />
                 <TileLayer
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
