@@ -6,12 +6,42 @@ import {
   createRecaptchaVerifier,
   sendOtp,
   verifyOtp,
+  toE164IndianPhone,
 } from '@/services/authService'
+import { isNativeAndroid } from '@/services/platform'
+import {
+  startNativePhoneSignIn,
+  confirmNativeOtp,
+  teardownNativePhoneSignIn,
+} from '@/services/nativePhoneAuth'
 import { useAuth } from '@/context/AuthContext'
 
-const RECAPTCHA_CONTAINER_ID = 'recaptcha-container'
-
 type Step = 'phone' | 'otp'
+
+/**
+ * Maps a Firebase phone-auth completion error to a message that matches
+ * what actually happened, instead of always saying "Incorrect OTP" (see
+ * handleVerifyOtp's original comment history). Shared between the web
+ * path (verifyOtp -> ConfirmationResult.confirm()) and the native path
+ * (confirmNativeOtp -> signInWithCredential()) since both are ultimately
+ * the same Firebase JS SDK call underneath and throw the same error codes.
+ */
+function mapVerifyOtpError(error: unknown): string {
+  const code = (error as { code?: string })?.code
+  if (code === 'auth/code-expired') {
+    return 'This code has expired. Please request a new OTP.'
+  }
+  if (code === 'auth/too-many-requests') {
+    return 'Too many attempts. Please wait a bit before trying again.'
+  }
+  if (code === 'auth/network-request-failed') {
+    return 'Network error — check your connection and try again.'
+  }
+  if (code === 'auth/invalid-verification-code') {
+    return 'Incorrect OTP. Please check the code and try again.'
+  }
+  return 'Something went wrong verifying the code. Please try again.'
+}
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -26,7 +56,14 @@ export default function LoginPage() {
 
   const confirmationResultRef = useRef<ConfirmationResult | null>(null)
   const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null)
-  const recaptchaReadyRef = useRef<Promise<unknown> | null>(null)
+  // Stable wrapper element that we imperatively add/remove a fresh child
+  // node to/from on every attempt — see teardownRecaptcha/createFreshVerifier.
+  const recaptchaHostRef = useRef<HTMLDivElement | null>(null)
+  // Guards against a double-tap firing handleSendOtp twice before the
+  // `submitting` state re-render has a chance to disable the button —
+  // two concurrent attempts would both try to render into a fresh node
+  // and race each other.
+  const sendInFlightRef = useRef(false)
 
   // Redirect a fully authenticated, registered employee to the right
   // dashboard as soon as AuthContext resolves their record.
@@ -58,22 +95,56 @@ export default function LoginPage() {
     }
   }, [location.state])
 
-  // Create and render the reCAPTCHA widget when the login screen mounts,
-  // and clean it up when it unmounts (e.g. navigating away after login,
-  // or back to this screen later) so a stale widget never lingers.
-  useEffect(() => {
-    const verifier = createRecaptchaVerifier(RECAPTCHA_CONTAINER_ID)
-    recaptchaVerifierRef.current = verifier
-    recaptchaReadyRef.current = verifier.render()
-
-    return () => {
-      recaptchaVerifierRef.current?.clear()
-      recaptchaVerifierRef.current = null
-      recaptchaReadyRef.current = null
+  // Tears down whatever reCAPTCHA state exists right now: releases
+  // Firebase's own verifier instance, then wipes every child out of the
+  // host element. The innerHTML wipe matters even though verifier.clear()
+  // already empties the DOM — Google's underlying grecaptcha script keeps
+  // its own separate internal registry of "which DOM elements already
+  // have a widget rendered into them," and that registry survives
+  // Firebase's own .clear() call. Re-rendering into the *same* physical
+  // DOM node a second time throws "reCAPTCHA has already been rendered in
+  // this element" even from a brand-new RecaptchaVerifier instance — the
+  // only reliable fix is to never reuse the same DOM node twice.
+  function teardownRecaptcha() {
+    recaptchaVerifierRef.current?.clear()
+    recaptchaVerifierRef.current = null
+    if (recaptchaHostRef.current) {
+      recaptchaHostRef.current.innerHTML = ''
     }
+  }
+
+  // Builds and renders a completely fresh reCAPTCHA widget, on a brand
+  // new child DOM node created for this attempt only. Called at the start
+  // of every single Send OTP attempt — never reuse a widget or its node
+  // across attempts. See teardownRecaptcha's comment for why.
+  async function createFreshVerifier(): Promise<RecaptchaVerifier> {
+    teardownRecaptcha()
+
+    const freshNode = document.createElement('div')
+    freshNode.id = `recaptcha-slot-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    recaptchaHostRef.current?.appendChild(freshNode)
+
+    const verifier = createRecaptchaVerifier(freshNode.id)
+    recaptchaVerifierRef.current = verifier
+    await verifier.render()
+    return verifier
+  }
+
+  // Clean up on unmount (e.g. navigating away after login).
+  useEffect(() => {
+    return () => {
+      if (isNativeAndroid()) {
+        teardownNativePhoneSignIn()
+      } else {
+        teardownRecaptcha()
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function handleSendOtp() {
+    if (sendInFlightRef.current) return
+
     setErrorMessage(null)
 
     const digitsOnly = phone.replace(/\D/g, '')
@@ -82,21 +153,45 @@ export default function LoginPage() {
       return
     }
 
+    sendInFlightRef.current = true
     setSubmitting(true)
     try {
-      if (!recaptchaVerifierRef.current || !recaptchaReadyRef.current) {
-        throw new Error('reCAPTCHA is not ready yet. Please wait a moment and try again.')
+      if (isNativeAndroid()) {
+        // Native Android: verification runs through Google Play Integrity
+        // (or a native reCAPTCHA fallback outside our WebView) instead of
+        // the browser-oriented widget — see nativePhoneAuth.ts for why.
+        await startNativePhoneSignIn(toE164IndianPhone(phone), {
+          onCodeSent: () => {
+            setStep('otp')
+            toast.success('OTP sent to your mobile number.')
+          },
+          onAutoVerified: () => {
+            // Android confirmed the number without any code entry —
+            // AuthContext's onAuthStateChanged listener picks this up and
+            // the redirect effect above navigates on once ready.
+            toast.success('Verified automatically.')
+          },
+        })
+      } else {
+        const verifier = await createFreshVerifier()
+        const confirmation = await sendOtp(phone, verifier)
+        confirmationResultRef.current = confirmation
+        setStep('otp')
+        toast.success('OTP sent to your mobile number.')
       }
-      await recaptchaReadyRef.current
-      const confirmation = await sendOtp(phone, recaptchaVerifierRef.current)
-      confirmationResultRef.current = confirmation
-      setStep('otp')
-      toast.success('OTP sent to your mobile number.')
     } catch (error) {
       console.error('[LoginPage] sendOtp failed:', error)
+      // Tear down whatever might be left in a corrupted/half-started state
+      // so the *next* attempt starts completely clean.
+      if (isNativeAndroid()) {
+        await teardownNativePhoneSignIn()
+      } else {
+        teardownRecaptcha()
+      }
       setErrorMessage('Something went wrong. Please try again.')
     } finally {
       setSubmitting(false)
+      sendInFlightRef.current = false
     }
   }
 
@@ -107,6 +202,23 @@ export default function LoginPage() {
       setErrorMessage('Enter the 6-digit code sent to your phone.')
       return
     }
+
+    if (isNativeAndroid()) {
+      setSubmitting(true)
+      try {
+        await confirmNativeOtp(otp.trim())
+        // AuthContext's onAuthStateChanged listener picks this up and the
+        // redirect effect above handles navigation once the employee
+        // lookup resolves.
+      } catch (error) {
+        console.error('[LoginPage] native verifyOtp failed:', error)
+        setErrorMessage(mapVerifyOtpError(error))
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+
     if (!confirmationResultRef.current) {
       setErrorMessage('Session expired. Please request a new OTP.')
       setStep('phone')
@@ -122,25 +234,8 @@ export default function LoginPage() {
     } catch (error) {
       console.error('[LoginPage] verifyOtp failed:', error)
       // Previously this always showed "Incorrect OTP", even when the real
-      // cause was something else entirely (the code expiring, too many
-      // attempts, a flaky mobile connection) — which is actively
-      // misleading when someone reports "I entered the right code and it
-      // still says incorrect", since a wrong code was never actually the
-      // problem. Firebase's phone-auth SDK throws a FirebaseError with a
-      // specific `.code`; branch on it so the message people see actually
-      // matches what happened.
-      const code = (error as { code?: string })?.code
-      if (code === 'auth/code-expired') {
-        setErrorMessage('This code has expired. Please request a new OTP.')
-      } else if (code === 'auth/too-many-requests') {
-        setErrorMessage('Too many attempts. Please wait a bit before trying again.')
-      } else if (code === 'auth/network-request-failed') {
-        setErrorMessage('Network error — check your connection and try again.')
-      } else if (code === 'auth/invalid-verification-code') {
-        setErrorMessage('Incorrect OTP. Please check the code and try again.')
-      } else {
-        setErrorMessage('Something went wrong verifying the code. Please try again.')
-      }
+      // cause was something else entirely — see mapVerifyOtpError.
+      setErrorMessage(mapVerifyOtpError(error))
     } finally {
       setSubmitting(false)
     }
@@ -151,6 +246,9 @@ export default function LoginPage() {
     setOtp('')
     setErrorMessage(null)
     confirmationResultRef.current = null
+    if (isNativeAndroid()) {
+      teardownNativePhoneSignIn()
+    }
   }
 
   return (
@@ -255,8 +353,10 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* Invisible reCAPTCHA anchor required by Firebase Phone Auth */}
-        <div id={RECAPTCHA_CONTAINER_ID} />
+        {/* Invisible reCAPTCHA anchor required by Firebase Phone Auth —
+            a stable wrapper; the actual widget node is created fresh
+            inside it on every attempt (see createFreshVerifier). */}
+        <div ref={recaptchaHostRef} />
       </div>
     </div>
   )

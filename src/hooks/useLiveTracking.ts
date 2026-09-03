@@ -22,11 +22,26 @@ import {
 } from '@/utils/offlineQueueDb'
 import { withConnectionRetry, isPermissionDenied } from '@/utils/firestoreResilience'
 import type { LocationPointQuality, NetworkStatus } from '@/types'
+import {
+  isNativeAndroid,
+  startNativeBackgroundTracking,
+  stopNativeBackgroundTracking,
+  type NativePoint,
+} from '@/services/nativeBackgroundTracking'
 
-/** Normal collection interval while battery is healthy. */
-const BASE_INTERVAL_MS = 60_000 // 60s
+/**
+ * Normal collection interval while battery is healthy. Tightened from 60s
+ * to 20s (Phase T14 follow-up) — at typical driving speed, a 60s gap
+ * between fixes let GPS distance calculation "cut corners" on any turn or
+ * curve between two points (odometers follow the actual curve, straight-
+ * line GPS math between sparse points doesn't), undercounting a real
+ * 5.8km trip as 5.1km (~12% short). A tighter interval samples curves more
+ * closely and shrinks that gap, at the cost of somewhat more battery use
+ * during a shift.
+ */
+const BASE_INTERVAL_MS = 20_000 // 20s
 /** Wider interval once battery drops below the threshold, to conserve it. */
-const LOW_BATTERY_INTERVAL_MS = 180_000 // 3 min
+const LOW_BATTERY_INTERVAL_MS = 90_000 // 90s
 const LOW_BATTERY_THRESHOLD_PERCENT = 20
 /** Accuracy readings worse than this (meters) get flagged, not discarded. */
 const LOW_ACCURACY_THRESHOLD_METERS = 100
@@ -241,6 +256,15 @@ async function recoverOrphanedSessions(
  * adapts to battery level; readings taken while offline are queued
  * durably (IndexedDB, Phase T12) and flushed once connectivity returns —
  * including across a full app/tab kill, not just within the same session.
+ *
+ * Phase T14 follow-up (native tracking fix): on the native Android build,
+ * fixes are collected by nativeBackgroundTracking.ts's Android foreground
+ * service instead of the setTimeout + navigator.geolocation loop below —
+ * the browser API is suspended the moment the screen turns off or the app
+ * is backgrounded, which was the root cause of large chunks of a route
+ * going unrecorded. Both paths funnel into the same `ingestPoint` so the
+ * offline-queue/flush/Firestore-write logic is identical either way; only
+ * how a fix is *obtained* differs.
  */
 export function useLiveTracking(
   employeeId: string | null,
@@ -318,6 +342,66 @@ export function useLiveTracking(
     }
   }, [])
 
+  /**
+   * Turns one raw fix (from either the web geolocation callback or the
+   * native background-tracking plugin) into a PendingPoint and either
+   * writes it straight to Firestore or queues it offline — the shared
+   * tail end of both collection paths. See the hook's own doc comment for
+   * why there are two sources feeding this one function.
+   */
+  const ingestPoint = useCallback(
+    async (input: {
+      lat: number
+      lng: number
+      accuracy: number | null
+      speedKmh: number | null
+      direction: number | null
+    }) => {
+      if (!sessionIdRef.current || !employeeIdRef.current) return
+
+      const quality: LocationPointQuality =
+        input.accuracy != null && input.accuracy > LOW_ACCURACY_THRESHOLD_METERS
+          ? 'low_accuracy'
+          : 'good'
+
+      const point: PendingPoint = {
+        employeeId: employeeIdRef.current,
+        trackingSessionId: sessionIdRef.current,
+        timestamp: Timestamp.now(),
+        lat: input.lat,
+        lng: input.lng,
+        address: null,
+        accuracy: input.accuracy,
+        speed: input.speedKmh,
+        direction: input.direction,
+        batteryPercent: batteryPercentRef.current,
+        networkStatus: (navigator.onLine ? 'online' : 'offline') as NetworkStatus,
+        quality,
+      }
+
+      if (!navigator.onLine) {
+        await enqueuePoint(point)
+        setQueuedCount(await countQueuedPoints(sessionIdRef.current))
+        return
+      }
+
+      try {
+        await flushOfflineQueue()
+        // Phase T13: see firestoreResilience.ts — recovers a wedged
+        // Firestore connection (permission-denied while genuinely
+        // online) with one reset + retry before falling through to the
+        // existing queue-on-failure handling below.
+        await withConnectionRetry(() => recordLocationPoint(point))
+        setLastSyncAt(new Date())
+      } catch (error) {
+        console.error('[useLiveTracking] Failed to record point:', error)
+        await enqueuePoint(point)
+        setQueuedCount(await countQueuedPoints(sessionIdRef.current))
+      }
+    },
+    [flushOfflineQueue]
+  )
+
   const collectPoint = useCallback(async () => {
     if (!navigator.geolocation || !sessionIdRef.current || !employeeIdRef.current) {
       return
@@ -326,53 +410,21 @@ export function useLiveTracking(
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { coords } = position
-        const quality: LocationPointQuality =
-          coords.accuracy != null && coords.accuracy > LOW_ACCURACY_THRESHOLD_METERS
-            ? 'low_accuracy'
-            : 'good'
-
-        const point: PendingPoint = {
-          employeeId: employeeIdRef.current!,
-          trackingSessionId: sessionIdRef.current!,
-          timestamp: Timestamp.now(),
+        await ingestPoint({
           lat: coords.latitude,
           lng: coords.longitude,
-          address: null,
           accuracy: coords.accuracy ?? null,
           // Device reports speed in m/s — convert to km/h for display consistency.
-          speed: coords.speed != null ? Math.round(coords.speed * 3.6 * 10) / 10 : null,
+          speedKmh: coords.speed != null ? Math.round(coords.speed * 3.6 * 10) / 10 : null,
           direction: coords.heading ?? null,
-          batteryPercent: batteryPercentRef.current,
-          networkStatus: (navigator.onLine ? 'online' : 'offline') as NetworkStatus,
-          quality,
-        }
-
-        if (!navigator.onLine) {
-          await enqueuePoint(point)
-          setQueuedCount(await countQueuedPoints(sessionIdRef.current!))
-          return
-        }
-
-        try {
-          await flushOfflineQueue()
-          // Phase T13: see firestoreResilience.ts — recovers a wedged
-          // Firestore connection (permission-denied while genuinely
-          // online) with one reset + retry before falling through to the
-          // existing queue-on-failure handling below.
-          await withConnectionRetry(() => recordLocationPoint(point))
-          setLastSyncAt(new Date())
-        } catch (error) {
-          console.error('[useLiveTracking] Failed to record point:', error)
-          await enqueuePoint(point)
-          setQueuedCount(await countQueuedPoints(sessionIdRef.current!))
-        }
+        })
       },
       (error) => {
         console.error('[useLiveTracking] getCurrentPosition failed:', error)
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     )
-  }, [flushOfflineQueue])
+  }, [ingestPoint])
 
   const scheduleNext = useCallback(() => {
     const batteryPercent = batteryPercentRef.current
@@ -387,6 +439,37 @@ export function useLiveTracking(
     }, interval)
   }, [collectPoint])
 
+  /**
+   * Starts the native foreground-service watcher (native Android build
+   * only). The interval is picked once, from the current battery level,
+   * same as scheduleNext's first tick — see nativeBackgroundTracking.ts's
+   * doc comment for why mid-session battery-adaptive switching isn't
+   * implemented on this path.
+   */
+  const startNativeWatcher = useCallback(async () => {
+    const batteryPercent = batteryPercentRef.current
+    const interval =
+      batteryPercent !== null && batteryPercent < LOW_BATTERY_THRESHOLD_PERCENT
+        ? LOW_BATTERY_INTERVAL_MS
+        : BASE_INTERVAL_MS
+
+    await startNativeBackgroundTracking(
+      interval,
+      (point: NativePoint) => {
+        void ingestPoint({
+          lat: point.lat,
+          lng: point.lng,
+          accuracy: point.accuracy,
+          speedKmh: point.speedKmh,
+          direction: point.bearing,
+        })
+      },
+      (error) => {
+        console.error('[useLiveTracking] Native background tracking error:', error)
+      }
+    )
+  }, [ingestPoint])
+
   const start = useCallback(
     async (startEmployeeId: string, attendanceLogId: string) => {
       employeeIdRef.current = startEmployeeId
@@ -399,10 +482,14 @@ export function useLiveTracking(
       setIsFinalizingSync(false)
       setQueuedCount(0)
 
-      await collectPoint()
-      scheduleNext()
+      if (isNativeAndroid()) {
+        await startNativeWatcher()
+      } else {
+        await collectPoint()
+        scheduleNext()
+      }
     },
-    [collectPoint, scheduleNext]
+    [collectPoint, scheduleNext, startNativeWatcher]
   )
 
   const resumeIfActive = useCallback(
@@ -431,9 +518,13 @@ export function useLiveTracking(
       // before resuming normal collection.
       await flushOfflineQueue()
 
-      scheduleNext()
+      if (isNativeAndroid()) {
+        await startNativeWatcher()
+      } else {
+        scheduleNext()
+      }
     },
-    [isTracking, scheduleNext, flushOfflineQueue]
+    [isTracking, scheduleNext, flushOfflineQueue, startNativeWatcher]
   )
 
   /**
@@ -448,6 +539,9 @@ export function useLiveTracking(
    * always sees the complete route, correctly ordered, whenever it runs.
    */
   const stop = useCallback(async () => {
+    if (isNativeAndroid()) {
+      await stopNativeBackgroundTracking()
+    }
     if (timeoutRef.current) {
       window.clearTimeout(timeoutRef.current)
       timeoutRef.current = null
@@ -547,6 +641,11 @@ export function useLiveTracking(
 
   useEffect(() => {
     return () => {
+      // Deliberately does NOT call stopNativeBackgroundTracking() here —
+      // the entire point of the native foreground service is to keep
+      // collecting after this component/hook instance unmounts (screen
+      // off, app backgrounded, user on a different page). Only an
+      // explicit stop() (punch-out) should stop it.
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current)
     }
   }, [])
