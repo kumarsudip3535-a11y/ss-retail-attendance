@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the darker stop of the logo's indigo gradient (see
+         public/logo.svg / icon-maskable-512.png) - was Capacitor's default
+         white, replaced together with the launcher icon artwork itself. -->
+    <color name="ic_launcher_background">#3730A3</color>
+</resources>

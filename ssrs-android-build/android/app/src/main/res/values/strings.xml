@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SS Retail Attendance</string>
+    <string name="title_activity_main">SS Retail Attendance</string>
+    <string name="package_name">in.ssretailservices.attendance</string>
+    <string name="custom_url_scheme">in.ssretailservices.attendance</string>
+</resources>
