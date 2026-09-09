@@ -1,0 +1,70 @@
+name: Build Android APK
+
+# Runs on every push to main. Builds the web app, syncs it into the native
+# Android project, compiles a debug APK, and commits it into
+# public/downloads/ so Netlify picks it up on its next deploy and serves it
+# at https://ssretailattandance.netlify.app/downloads/ss-retail-attendance.apk
+#
+# This is a DEBUG build (installable and fully functional, just not signed
+# for the Play Store). That's fine for direct-download/internal use. If you
+# ever want a Play Store release build, that needs a signing keystore set up
+# separately — ask and it can be added as a follow-up phase.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Sync Capacitor Android project
+        run: npx cap sync android
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Copy APK into public downloads folder
+        run: |
+          mkdir -p public/downloads
+          cp android/app/build/outputs/apk/debug/app-debug.apk public/downloads/ss-retail-attendance.apk
+
+      - name: Commit and push the built APK
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/downloads/ss-retail-attendance.apk
+          if git diff --cached --quiet; then
+            echo "APK unchanged, nothing to commit."
+          else
+            git commit -m "Auto-build: update Android APK"
+            git push
+          fi

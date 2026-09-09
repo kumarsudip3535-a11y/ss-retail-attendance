@@ -357,6 +357,17 @@ export default function LoginPage() {
             a stable wrapper; the actual widget node is created fresh
             inside it on every attempt (see createFreshVerifier). */}
         <div ref={recaptchaHostRef} />
+
+        {/* Only shown on the plain website — pointless (and confusing)
+            inside the native Android app itself, since that IS the app. */}
+        {!isNativeAndroid() && (
+          <a
+            href="/downloads/ss-retail-attendance.apk"
+            className="mt-6 block text-center text-xs text-brand-600 hover:text-brand-700 underline underline-offset-2"
+          >
+            Download Android App (APK)
+          </a>
+        )}
       </div>
     </div>
   )
