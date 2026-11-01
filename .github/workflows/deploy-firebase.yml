@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-node@v4
         if: env.HAS_SA == 'true'
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Authenticate to Google Cloud
         if: env.HAS_SA == 'true'
@@ -53,4 +53,4 @@ jobs:
 
       - name: Deploy rules, indexes and functions
         if: env.HAS_SA == 'true'
-        run: npx --yes firebase-tools@13 deploy --only firestore,functions --project ss-retail-attendance --non-interactive --force
+        run: npx --yes firebase-tools@14 deploy --only firestore,functions --project ss-retail-attendance --non-interactive --force

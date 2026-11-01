@@ -28,7 +28,9 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Capacitor CLI 8 refuses to run on Node < 22 ("npx cap sync"
+          # fails), which is why every APK build so far had failed.
+          node-version: '22'
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
