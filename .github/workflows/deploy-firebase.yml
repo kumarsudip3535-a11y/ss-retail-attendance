@@ -1,0 +1,55 @@
+name: Deploy Firebase (rules + Cloud Functions)
+
+# Deploys firestore.rules, firestore.indexes.json and functions/ whenever
+# they change on main — so nobody has to run `firebase deploy` by hand.
+#
+# One-time setup (repo → Settings → Secrets and variables → Actions):
+#   FIREBASE_SERVICE_ACCOUNT = the full JSON key of a service account in the
+#   ss-retail-attendance Google Cloud project with these roles:
+#     Firebase Admin, Cloud Functions Admin, Service Account User,
+#     Cloud Build Editor, Artifact Registry Administrator.
+# Until that secret exists this workflow just prints a notice and exits.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'functions/**'
+      - 'firestore.rules'
+      - 'firestore.indexes.json'
+      - 'firebase.json'
+      - '.github/workflows/deploy-firebase.yml'
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HAS_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+    steps:
+      - name: Skip if not configured
+        if: env.HAS_SA != 'true'
+        run: echo "::notice::FIREBASE_SERVICE_ACCOUNT secret not set — skipping Firebase deploy. Run 'firebase deploy --only firestore,functions' manually or add the secret."
+
+      - uses: actions/checkout@v4
+        if: env.HAS_SA == 'true'
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_SA == 'true'
+        with:
+          node-version: '20'
+
+      - name: Authenticate to Google Cloud
+        if: env.HAS_SA == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Install Cloud Functions dependencies
+        if: env.HAS_SA == 'true'
+        working-directory: functions
+        run: npm ci
+
+      - name: Deploy rules, indexes and functions
+        if: env.HAS_SA == 'true'
+        run: npx --yes firebase-tools@13 deploy --only firestore,functions --project ss-retail-attendance --non-interactive --force
