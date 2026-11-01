@@ -6,8 +6,9 @@ name: Deploy Firebase (rules + Cloud Functions)
 # One-time setup (repo → Settings → Secrets and variables → Actions):
 #   FIREBASE_SERVICE_ACCOUNT = the full JSON key of a service account in the
 #   ss-retail-attendance Google Cloud project with these roles:
-#     Firebase Admin, Cloud Functions Admin, Service Account User,
-#     Cloud Build Editor, Artifact Registry Administrator.
+#     Firebase Admin, Cloud Functions Admin, Cloud Run Admin, Eventarc Admin,
+#     Service Account User, Cloud Build Editor, Artifact Registry Administrator.
+#   (2nd-gen Firestore-triggered functions run on Cloud Run + Eventarc.)
 # Until that secret exists this workflow just prints a notice and exits.
 
 on:
