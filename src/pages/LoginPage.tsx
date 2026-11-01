@@ -15,6 +15,11 @@ import {
   teardownNativePhoneSignIn,
 } from '@/services/nativePhoneAuth'
 import { useAuth } from '@/context/AuthContext'
+import OtpInput, { type OtpVisualState } from '@/components/login/OtpInput'
+import { SmsIllustration, ResendRing, SuccessBurst, Spinner, StepDots } from '@/components/login/LoginVisuals'
+
+/** Seconds before "Resend OTP" becomes available. */
+const RESEND_SECONDS = 30
 
 type Step = 'phone' | 'otp'
 
@@ -53,6 +58,8 @@ export default function LoginPage() {
   const [otp, setOtp] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [otpState, setOtpState] = useState<OtpVisualState>('idle')
+  const [resendIn, setResendIn] = useState(0)
 
   const confirmationResultRef = useRef<ConfirmationResult | null>(null)
   const recaptchaVerifierRef = useRef<RecaptchaVerifier | null>(null)
@@ -80,6 +87,7 @@ export default function LoginPage() {
   // from ProtectedRoute, or if AuthContext just determined this directly.
   useEffect(() => {
     if (!loading && firebaseUser && isUnregistered) {
+      setOtpState('idle')
       setErrorMessage(
         'Your mobile number is not registered. Please contact the administrator.'
       )
@@ -94,6 +102,31 @@ export default function LoginPage() {
       )
     }
   }, [location.state])
+
+  // Resend countdown — ticks once a second while on the OTP step.
+  useEffect(() => {
+    if (step !== 'otp' || resendIn <= 0) return
+    const t = window.setTimeout(() => setResendIn((n) => n - 1), 1000)
+    return () => window.clearTimeout(t)
+  }, [step, resendIn])
+
+  /** Moves to the OTP step (or refreshes it on resend) with a fresh countdown. */
+  function enterOtpStep() {
+    setStep('otp')
+    setOtp('')
+    setOtpState('idle')
+    setResendIn(RESEND_SECONDS)
+  }
+
+  /** Visual + message handling shared by both verify paths on failure. */
+  function failVerify(error: unknown) {
+    setErrorMessage(mapVerifyOtpError(error))
+    setOtpState('error')
+    window.setTimeout(() => {
+      setOtpState('idle')
+      setOtp('')
+    }, 650)
+  }
 
   // Tears down whatever reCAPTCHA state exists right now: releases
   // Firebase's own verifier instance, then wipes every child out of the
@@ -162,7 +195,7 @@ export default function LoginPage() {
         // the browser-oriented widget — see nativePhoneAuth.ts for why.
         await startNativePhoneSignIn(toE164IndianPhone(phone), {
           onCodeSent: () => {
-            setStep('otp')
+            enterOtpStep()
             toast.success('OTP sent to your mobile number.')
           },
           onAutoVerified: () => {
@@ -176,7 +209,7 @@ export default function LoginPage() {
         const verifier = await createFreshVerifier()
         const confirmation = await sendOtp(phone, verifier)
         confirmationResultRef.current = confirmation
-        setStep('otp')
+        enterOtpStep()
         toast.success('OTP sent to your mobile number.')
       }
     } catch (error) {
@@ -195,31 +228,19 @@ export default function LoginPage() {
     }
   }
 
-  async function handleVerifyOtp() {
+  async function handleVerifyOtp(codeArg?: string) {
+    if (submitting || otpState === 'success') return
     setErrorMessage(null)
+    const code = (codeArg ?? otp).trim()
 
-    if (otp.trim().length < 6) {
+    if (code.length < 6) {
       setErrorMessage('Enter the 6-digit code sent to your phone.')
+      setOtpState('error')
+      window.setTimeout(() => setOtpState('idle'), 650)
       return
     }
 
-    if (isNativeAndroid()) {
-      setSubmitting(true)
-      try {
-        await confirmNativeOtp(otp.trim())
-        // AuthContext's onAuthStateChanged listener picks this up and the
-        // redirect effect above handles navigation once the employee
-        // lookup resolves.
-      } catch (error) {
-        console.error('[LoginPage] native verifyOtp failed:', error)
-        setErrorMessage(mapVerifyOtpError(error))
-      } finally {
-        setSubmitting(false)
-      }
-      return
-    }
-
-    if (!confirmationResultRef.current) {
+    if (!isNativeAndroid() && !confirmationResultRef.current) {
       setErrorMessage('Session expired. Please request a new OTP.')
       setStep('phone')
       return
@@ -227,15 +248,20 @@ export default function LoginPage() {
 
     setSubmitting(true)
     try {
-      await verifyOtp(confirmationResultRef.current, otp.trim())
+      if (isNativeAndroid()) {
+        await confirmNativeOtp(code)
+      } else {
+        await verifyOtp(confirmationResultRef.current!, code)
+      }
       // AuthContext's onAuthStateChanged listener picks this up and the
       // redirect effect above handles navigation once the employee
-      // lookup resolves.
+      // lookup resolves — meanwhile show the success animation.
+      setOtpState('success')
     } catch (error) {
       console.error('[LoginPage] verifyOtp failed:', error)
       // Previously this always showed "Incorrect OTP", even when the real
       // cause was something else entirely — see mapVerifyOtpError.
-      setErrorMessage(mapVerifyOtpError(error))
+      failVerify(error)
     } finally {
       setSubmitting(false)
     }
@@ -244,6 +270,8 @@ export default function LoginPage() {
   function handleChangeNumber() {
     setStep('phone')
     setOtp('')
+    setOtpState('idle')
+    setResendIn(0)
     setErrorMessage(null)
     confirmationResultRef.current = null
     if (isNativeAndroid()) {
@@ -251,8 +279,12 @@ export default function LoginPage() {
     }
   }
 
+  const phoneDigits = phone.replace(/\D/g, '').slice(0, 10)
+  const prettyPhone = phoneDigits.length > 5 ? `${phoneDigits.slice(0, 5)} ${phoneDigits.slice(5)}` : phoneDigits
+  const phoneReady = phoneDigits.length === 10
+
   return (
-    <div className="min-h-screen px-4 sm:px-8 lg:px-20 pt-[34vh] pb-10 sm:pt-[38vh] lg:py-10 flex flex-col items-center lg:items-start lg:justify-center gap-8">
+    <div className="login-stage min-h-screen px-4 sm:px-8 lg:px-20 pt-[30vh] pb-10 sm:pt-[34vh] lg:py-10 flex flex-col items-center lg:items-start lg:justify-center gap-8">
       {/* Copy column — on large screens the 3D route globe (Background3D,
           'hero' variant) fills the right half of the viewport. */}
       <div className="hidden lg:block max-w-md login-card-3d [animation-delay:0.15s]">
@@ -261,11 +293,9 @@ export default function LoginPage() {
           Live field tracking
         </p>
         <h1 className="mt-4 text-4xl xl:text-5xl font-extrabold leading-[1.05] tracking-tight text-slate-900">
-          Every shift.
-          <br />
-          Every stop.
-          <br />
-          <span className="text-gradient-3d">Every kilometre.</span>
+          <span className="headline-line">Every shift.</span>
+          <span className="headline-line [animation-delay:0.12s]">Every stop.</span>
+          <span className="headline-line [animation-delay:0.24s] text-gradient-3d text-gradient-animated">Every kilometre.</span>
         </h1>
         <p className="mt-4 text-sm text-slate-500 max-w-sm">
           Attendance, live GPS routes and travel claims for SS Retail Services field teams — in one place.
@@ -275,8 +305,12 @@ export default function LoginPage() {
             ['GPS', 'Punch-in geofence'],
             ['Live', 'Route & distance'],
             ['₹', 'Auto travel claims'],
-          ].map(([big, small]) => (
-            <div key={small} className="tilt-tile rounded-xl bg-white/70 backdrop-blur border border-white/80 px-3 py-3 shadow-[0_10px_24px_-14px_rgba(49,46,129,0.4)]">
+          ].map(([big, small], i) => (
+            <div
+              key={small}
+              className="tilt-tile feature-float rounded-xl bg-white/70 backdrop-blur border border-white/80 px-3 py-3 shadow-[0_10px_24px_-14px_rgba(49,46,129,0.4)]"
+              style={{ animationDelay: `${i * 0.6}s` }}
+            >
               <p className="text-lg font-bold text-indigo-600">{big}</p>
               <p className="text-[11px] leading-tight text-slate-500">{small}</p>
             </div>
@@ -284,123 +318,187 @@ export default function LoginPage() {
         </div>
       </div>
 
-      <div className="w-full max-w-sm">
-      <div className="w-full login-card-3d card-3d rounded-3xl bg-white shadow-sm border border-slate-200 p-8">
-        <img
-          src="/logo.svg"
-          alt="SS Retail Services"
-          className="h-10 w-auto mx-auto block drop-shadow-[0_6px_12px_rgba(67,56,202,0.25)]"
-        />
-        <p className="mt-2 text-sm text-slate-500 text-center">
-          Employee Attendance Management System
-        </p>
-
-        {errorMessage && (
-          <div className="mt-5 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
-            {errorMessage}
+      <div className="w-full max-w-sm login-card-wrap">
+        <div className="login-card-glow" aria-hidden="true" />
+        <div className="w-full login-card-3d card-3d rounded-3xl bg-white shadow-sm border border-slate-200 p-7 sm:p-8 overflow-hidden">
+          <div className="flex items-center justify-between">
+            <img
+              src="/logo.svg"
+              alt="SS Retail Services"
+              className="h-9 w-auto drop-shadow-[0_6px_12px_rgba(67,56,202,0.25)] logo-spin-in"
+            />
+            <StepDots step={step === 'phone' ? 1 : 2} />
           </div>
-        )}
 
-        {step === 'phone' && (
-          <div className="mt-6 space-y-4">
-            <div>
-              <label
-                htmlFor="phone"
-                className="block text-sm font-medium text-slate-700 mb-1"
-              >
-                Mobile Number
-              </label>
-              <div className="flex rounded-lg border border-slate-300 overflow-hidden focus-within:ring-2 focus-within:ring-brand-500">
-                <span className="px-3 py-2 bg-slate-50 text-slate-500 text-sm border-r border-slate-300">
-                  +91
-                </span>
-                <input
-                  id="phone"
-                  type="tel"
-                  inputMode="numeric"
-                  maxLength={10}
-                  placeholder="98765 43210"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="flex-1 px-3 py-2 text-sm outline-none"
-                />
+          {/* key={step} remounts the panel so each step swings in on its own 3D hinge. */}
+          <div key={step} className="step-swing-in">
+            {step === 'phone' ? (
+              <>
+                <h2 className="mt-6 text-2xl font-bold tracking-tight text-slate-900">
+                  Welcome <span className="text-gradient-3d">back</span>
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">Sign in with your registered mobile number.</p>
+              </>
+            ) : (
+              <div className="mt-5 flex items-center gap-4">
+                <SmsIllustration verified={otpState === 'success'} />
+                <div className="min-w-0">
+                  <h2 className="text-xl font-bold tracking-tight text-slate-900">
+                    {otpState === 'success' ? 'Verified!' : 'Check your SMS'}
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {otpState === 'success' ? 'Signing you in…' : (
+                      <>
+                        Code sent to <span className="font-semibold text-slate-700 tabular-nums">+91 {prettyPhone}</span>
+                        <button
+                          type="button"
+                          onClick={handleChangeNumber}
+                          className="ml-1.5 text-xs font-semibold text-indigo-600 hover:underline"
+                        >
+                          Edit
+                        </button>
+                      </>
+                    )}
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
 
-            <button
-              onClick={handleSendOtp}
-              disabled={submitting}
-              className="btn-3d w-full rounded-xl bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-semibold py-3"
-            >
-              {submitting ? 'Sending…' : 'Send OTP'}
-            </button>
-          </div>
-        )}
+            {errorMessage && (
+              <div className="mt-5 text-sm text-red-600 bg-red-50/90 border border-red-200 rounded-xl p-3 error-pop" role="alert">
+                {errorMessage}
+              </div>
+            )}
 
-        {step === 'otp' && (
-          <div className="mt-6 space-y-4">
-            <div>
-              <label
-                htmlFor="otp"
-                className="block text-sm font-medium text-slate-700 mb-1"
+            {step === 'phone' && (
+              <form
+                className="mt-6 space-y-5"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  void handleSendOtp()
+                }}
               >
-                Enter OTP
-              </label>
-              <input
-                id="otp"
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="123456"
-                value={otp}
-                onChange={(e) => setOtp(e.target.value)}
-                // Lets mobile browsers offer the *actual latest* SMS code
-                // as a one-tap autofill suggestion, instead of the person
-                // manually switching to Messages and copying a code by
-                // hand — which is an easy way to accidentally copy an
-                // older OTP still sitting in the thread from a previous
-                // attempt and paste in a code that's already expired.
-                autoComplete="one-time-code"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-500 tracking-widest"
-              />
-              <p className="mt-1 text-xs text-slate-400">
-                Sent to +91 {phone}
-              </p>
-            </div>
+                <div className={`phone-field ${phoneDigits ? 'has-value' : ''}`}>
+                  <span className="phone-prefix">
+                    <span className="flag-stripe" aria-hidden="true" />
+                    +91
+                  </span>
+                  <input
+                    id="phone"
+                    type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel-national"
+                    maxLength={11}
+                    value={prettyPhone}
+                    onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                    className="phone-input tabular-nums"
+                    placeholder=" "
+                    autoFocus
+                  />
+                  <label htmlFor="phone" className="phone-label">
+                    Mobile number
+                  </label>
+                  <span className={`phone-check ${phoneReady ? 'is-on' : ''}`} aria-hidden="true">
+                    ✓
+                  </span>
+                </div>
 
-            <button
-              onClick={handleVerifyOtp}
-              disabled={submitting}
-              className="btn-3d w-full rounded-xl bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-semibold py-3"
-            >
-              {submitting ? 'Verifying…' : 'Verify OTP'}
-            </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="btn-3d btn-shine w-full rounded-xl bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-3 flex items-center justify-center gap-2"
+                >
+                  {submitting ? (
+                    <>
+                      <Spinner /> Sending OTP…
+                    </>
+                  ) : (
+                    <>Send OTP <span aria-hidden="true" className="btn-arrow">→</span></>
+                  )}
+                </button>
+              </form>
+            )}
 
-            <button
-              onClick={handleChangeNumber}
-              className="w-full text-xs text-slate-400 hover:text-slate-600"
-            >
-              Use a different number
-            </button>
+            {step === 'otp' && (
+              <div className="mt-6 space-y-5">
+                <OtpInput
+                  value={otp}
+                  onChange={(v) => {
+                    setOtp(v)
+                    if (errorMessage) setErrorMessage(null)
+                  }}
+                  onComplete={(code) => void handleVerifyOtp(code)}
+                  disabled={submitting || otpState === 'success'}
+                  state={otpState}
+                />
+
+                {otpState === 'success' ? (
+                  <SuccessBurst />
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void handleVerifyOtp()}
+                      disabled={submitting || otp.length < 6}
+                      className="btn-3d btn-shine w-full rounded-xl bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-3 flex items-center justify-center gap-2"
+                    >
+                      {submitting ? (
+                        <>
+                          <Spinner /> Verifying…
+                        </>
+                      ) : (
+                        'Verify & Sign In'
+                      )}
+                    </button>
+
+                    <div className="flex items-center justify-center">
+                      {resendIn > 0 ? (
+                        <p className="flex items-center gap-2 text-xs text-slate-500">
+                          <ResendRing remaining={resendIn} total={RESEND_SECONDS} />
+                          Resend code in <span className="tabular-nums font-semibold text-slate-700">{resendIn}s</span>
+                        </p>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleSendOtp()}
+                          disabled={submitting}
+                          className="resend-btn text-xs font-semibold text-indigo-600 hover:text-indigo-700 disabled:opacity-50"
+                        >
+                          ↻ Resend OTP
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
-        )}
 
-        {/* Invisible reCAPTCHA anchor required by Firebase Phone Auth —
-            a stable wrapper; the actual widget node is created fresh
-            inside it on every attempt (see createFreshVerifier). */}
-        <div ref={recaptchaHostRef} />
+          {/* Invisible reCAPTCHA anchor required by Firebase Phone Auth —
+              a stable wrapper; the actual widget node is created fresh
+              inside it on every attempt (see createFreshVerifier). */}
+          <div ref={recaptchaHostRef} />
 
-        {/* Only shown on the plain website — pointless (and confusing)
-            inside the native Android app itself, since that IS the app. */}
-        {!isNativeAndroid() && (
-          <a
-            href="/downloads/ss-retail-attendance.apk"
-            className="mt-6 block text-center text-xs text-brand-600 hover:text-brand-700 underline underline-offset-2"
-          >
-            Download Android App (APK)
-          </a>
-        )}
-      </div>
+          <div className="mt-6 pt-4 border-t border-slate-200/70 flex items-center justify-between text-[11px] text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="5" y="11" width="14" height="10" rx="2" />
+                <path d="M8 11V7a4 4 0 018 0v4" />
+              </svg>
+              Secured with OTP
+            </span>
+            {/* Only shown on the plain website — pointless (and confusing)
+                inside the native Android app itself, since that IS the app. */}
+            {!isNativeAndroid() && (
+              <a
+                href="/downloads/ss-retail-attendance.apk"
+                className="font-medium text-brand-600 hover:text-brand-700 underline underline-offset-2"
+              >
+                Download Android App
+              </a>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )

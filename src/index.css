@@ -277,3 +277,466 @@ body {
     transform: none !important;
   }
 }
+
+/* ==========================================================================
+   Login & OTP animations
+   ========================================================================== */
+
+/* Card floats gently and has a soft animated glow behind it */
+.login-card-wrap {
+  position: relative;
+  perspective: 1200px;
+}
+.login-card-glow {
+  position: absolute;
+  inset: 8% -6% -6%;
+  border-radius: 2rem;
+  background: conic-gradient(from 0deg, #6366f1, #0ea5e9, #10b981, #6366f1);
+  filter: blur(38px);
+  opacity: 0.32;
+  animation: glow-spin 9s linear infinite;
+  z-index: -1;
+}
+@keyframes glow-spin {
+  to { transform: rotate(360deg); }
+}
+
+.logo-spin-in {
+  animation: logo-spin-in 1s cubic-bezier(0.2, 0.8, 0.2, 1) 0.2s backwards;
+}
+@keyframes logo-spin-in {
+  from { opacity: 0; transform: perspective(500px) rotateY(-180deg) scale(0.6); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Headline lines rise in one after another; gradient text shimmers */
+.headline-line {
+  display: block;
+  animation: headline-rise 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+@keyframes headline-rise {
+  from { opacity: 0; transform: perspective(600px) translateY(24px) rotateX(-40deg); }
+  to { opacity: 1; transform: none; }
+}
+.text-gradient-animated {
+  background-size: 200% auto;
+  animation: headline-rise 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) backwards, gradient-shift 6s ease-in-out 1s infinite alternate;
+}
+@keyframes gradient-shift {
+  to { background-position: 100% center; }
+}
+.feature-float {
+  animation: feature-float 5s ease-in-out infinite;
+}
+@keyframes feature-float {
+  50% { transform: translateY(-6px); }
+}
+
+/* Each step swings in on a 3D hinge */
+.step-swing-in {
+  transform-origin: left center;
+  animation: step-swing 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+@keyframes step-swing {
+  from { opacity: 0; transform: perspective(900px) rotateY(-35deg) translateX(24px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Step indicator */
+.step-dot {
+  display: inline-flex;
+  height: 1.35rem;
+  width: 1.35rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: #e2e8f0;
+  color: #94a3b8;
+  transition: all 0.4s ease;
+}
+.step-dot.is-on {
+  background: linear-gradient(135deg, #6366f1, #0ea5e9);
+  color: white;
+  box-shadow: 0 4px 10px -2px rgb(79 70 229 / 0.5);
+}
+.step-bar {
+  height: 2px;
+  width: 1.5rem;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #6366f1 50%, #e2e8f0 50%);
+  background-size: 200% 100%;
+  background-position: 100% 0;
+  transition: background-position 0.6s ease;
+}
+.step-bar.is-on {
+  background-position: 0 0;
+}
+
+/* Floating-label phone field */
+.phone-field {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border-radius: 0.9rem;
+  background: rgb(255 255 255 / 0.85);
+  border: 1.5px solid #cbd5e1;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+}
+.phone-field:focus-within {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 4px rgb(99 102 241 / 0.15), 0 10px 24px -14px rgb(67 56 202 / 0.6);
+  transform: translateY(-1px);
+}
+.phone-prefix {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.85rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #475569;
+  border-right: 1.5px solid #e2e8f0;
+}
+.flag-stripe {
+  width: 1.1rem;
+  height: 0.8rem;
+  border-radius: 2px;
+  background: linear-gradient(#ff9933 33%, #ffffff 33% 66%, #138808 66%);
+  box-shadow: 0 0 0 1px rgb(15 23 42 / 0.08);
+}
+.phone-input {
+  flex: 1;
+  min-width: 0;
+  padding: 1.35rem 2.4rem 0.55rem 0.85rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #0f172a;
+  background: transparent;
+  outline: none;
+}
+.phone-label {
+  position: absolute;
+  left: 5.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.9rem;
+  color: #94a3b8;
+  pointer-events: none;
+  transition: all 0.2s ease;
+}
+.phone-field:focus-within .phone-label,
+.phone-field.has-value .phone-label {
+  top: 0.95rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6366f1;
+}
+.phone-check {
+  position: absolute;
+  right: 0.8rem;
+  top: 50%;
+  display: flex;
+  height: 1.3rem;
+  width: 1.3rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: #10b981;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 800;
+  transform: translateY(-50%) scale(0);
+  transition: transform 0.35s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+.phone-check.is-on {
+  transform: translateY(-50%) scale(1);
+}
+
+/* Shiny 3D buttons */
+.btn-shine {
+  overflow: hidden;
+}
+.btn-shine::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 0.35) 50%, transparent 70%);
+  transform: translateX(-120%);
+  animation: btn-sheen 3.2s ease-in-out 1.2s infinite;
+  pointer-events: none;
+}
+@keyframes btn-sheen {
+  0%, 60% { transform: translateX(-120%); }
+  100% { transform: translateX(120%); }
+}
+.btn-arrow {
+  display: inline-block;
+  transition: transform 0.25s ease;
+}
+.btn-3d:hover .btn-arrow {
+  transform: translateX(4px);
+}
+
+.error-pop {
+  animation: error-pop 0.4s cubic-bezier(0.3, 1.5, 0.5, 1) backwards;
+}
+@keyframes error-pop {
+  from { opacity: 0; transform: scale(0.95) translateY(-4px); }
+}
+
+/* --- OTP boxes --- */
+.otp-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.5rem;
+  perspective: 700px;
+}
+.otp-box {
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  max-height: 3.6rem;
+  border-radius: 0.8rem;
+  border: 1.5px solid #cbd5e1;
+  background: rgb(255 255 255 / 0.9);
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1e1b4b;
+  caret-color: #6366f1;
+  outline: none;
+  box-shadow: 0 6px 14px -10px rgb(49 46 129 / 0.45), inset 0 -3px 0 rgb(99 102 241 / 0.08);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease, background-color 0.3s ease;
+  animation: otp-drop 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.2) backwards;
+}
+@keyframes otp-drop {
+  from { opacity: 0; transform: rotateX(-90deg) translateY(-14px); }
+  to { opacity: 1; transform: none; }
+}
+.otp-box:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 4px rgb(99 102 241 / 0.18), 0 12px 22px -12px rgb(67 56 202 / 0.7);
+  transform: translateY(-3px);
+}
+.otp-box.is-filled {
+  border-color: #818cf8;
+  background: linear-gradient(180deg, #ffffff, #eef2ff);
+  animation: otp-flip 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+@keyframes otp-flip {
+  from { transform: rotateX(-80deg); }
+  to { transform: none; }
+}
+.otp-row--error {
+  animation: otp-shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+.otp-row--error .otp-box {
+  border-color: #f43f5e;
+  background: #fff1f2;
+  color: #be123c;
+}
+@keyframes otp-shake {
+  10%, 90% { transform: translateX(-2px); }
+  20%, 80% { transform: translateX(4px); }
+  30%, 50%, 70% { transform: translateX(-7px); }
+  40%, 60% { transform: translateX(7px); }
+}
+.otp-row--success .otp-box {
+  border-color: #10b981;
+  background: #ecfdf5;
+  color: #047857;
+  animation: otp-wave 0.6s ease var(--wave-delay, 0ms) both;
+}
+@keyframes otp-wave {
+  40% { transform: translateY(-8px) rotateX(20deg); }
+  100% { transform: none; }
+}
+
+/* --- SMS phone illustration --- */
+.sms-phone {
+  position: relative;
+  flex: none;
+  width: 3.6rem;
+  height: 4.9rem;
+  animation: sms-phone-in 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.2) backwards, sms-phone-bob 3.5s ease-in-out 0.8s infinite;
+}
+.sms-phone-svg {
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 10px 14px rgb(67 56 202 / 0.35));
+}
+@keyframes sms-phone-in {
+  from { opacity: 0; transform: perspective(400px) rotateY(70deg) translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes sms-phone-bob {
+  50% { transform: translateY(-4px) rotate(-2deg); }
+}
+.sms-bubble {
+  position: absolute;
+  left: 18%;
+  top: 30%;
+  width: 64%;
+  padding: 0.25rem 0.2rem;
+  border-radius: 0.45rem 0.45rem 0.45rem 0.1rem;
+  background: #6366f1;
+  color: white;
+  text-align: center;
+  font-size: 0.42rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  display: grid;
+  place-items: center;
+  transform-origin: left bottom;
+  animation: bubble-pop 0.45s cubic-bezier(0.3, 1.6, 0.5, 1) 0.5s backwards;
+}
+@keyframes bubble-pop {
+  from { transform: scale(0); opacity: 0; }
+}
+.sms-dots {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  gap: 2px;
+  animation: fade-out 0.25s ease 2.2s forwards;
+}
+.sms-dots i {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 9999px;
+  background: white;
+  animation: typing 0.9s ease-in-out infinite;
+}
+.sms-dots i:nth-child(2) { animation-delay: 0.15s; }
+.sms-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typing {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.6; }
+  30% { transform: translateY(-2px); opacity: 1; }
+}
+.sms-code {
+  grid-area: 1 / 1;
+  opacity: 0;
+  animation: fade-in 0.3s ease 2.3s forwards;
+}
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes fade-in { to { opacity: 1; } }
+.sms-check {
+  position: absolute;
+  right: -0.35rem;
+  bottom: 0.4rem;
+  display: flex;
+  height: 1.4rem;
+  width: 1.4rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: #10b981;
+  color: white;
+  box-shadow: 0 4px 10px -2px rgb(16 185 129 / 0.6);
+  transform: scale(0);
+  transition: transform 0.4s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+.sms-check svg { width: 0.85rem; height: 0.85rem; }
+.sms-phone.is-verified .sms-check { transform: scale(1); }
+.sms-phone.is-verified .sms-bubble { background: #10b981; }
+.sms-ping {
+  position: absolute;
+  right: 0.05rem;
+  top: 0.05rem;
+  height: 0.6rem;
+  width: 0.6rem;
+  border-radius: 9999px;
+  background: #f59e0b;
+  box-shadow: 0 0 0 0 rgb(245 158 11 / 0.7);
+  animation: live-ping 1.6s ease-out 0.6s infinite;
+}
+.sms-phone.is-verified .sms-ping { display: none; }
+
+.resend-btn {
+  animation: error-pop 0.4s cubic-bezier(0.3, 1.5, 0.5, 1) backwards;
+}
+
+/* --- Success burst --- */
+.success-burst {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.5rem 0 0.25rem;
+  animation: error-pop 0.4s ease backwards;
+}
+.success-disc {
+  position: relative;
+  height: 3.5rem;
+  width: 3.5rem;
+}
+.success-check {
+  height: 100%;
+  width: 100%;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.success-check circle {
+  stroke: #10b981;
+  stroke-dasharray: 152;
+  stroke-dashoffset: 152;
+  animation: draw 0.6s ease forwards;
+}
+.success-check path {
+  stroke: #10b981;
+  stroke-dasharray: 40;
+  stroke-dashoffset: 40;
+  animation: draw 0.35s ease 0.55s forwards;
+}
+@keyframes draw {
+  to { stroke-dashoffset: 0; }
+}
+.success-spark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 0.35rem;
+  width: 0.35rem;
+  margin: -0.175rem;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #6366f1, #10b981);
+  opacity: 0;
+  animation: spark 0.8s ease-out 0.5s forwards;
+}
+.success-spark:nth-child(odd) { background: #f59e0b; }
+@keyframes spark {
+  0% { opacity: 1; transform: rotate(var(--a)) translateY(0) scale(1); }
+  100% { opacity: 0; transform: rotate(var(--a)) translateY(-2.6rem) scale(0.4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-card-glow,
+  .logo-spin-in,
+  .headline-line,
+  .text-gradient-animated,
+  .feature-float,
+  .step-swing-in,
+  .btn-shine::before,
+  .error-pop,
+  .otp-box,
+  .otp-box.is-filled,
+  .otp-row--error,
+  .otp-row--success .otp-box,
+  .sms-phone,
+  .sms-bubble,
+  .sms-dots i,
+  .sms-ping,
+  .success-spark {
+    animation: none !important;
+  }
+  .sms-dots { opacity: 0; }
+  .sms-code { opacity: 1; animation: none !important; }
+  .success-check circle,
+  .success-check path {
+    stroke-dashoffset: 0;
+    animation: none;
+  }
+}
