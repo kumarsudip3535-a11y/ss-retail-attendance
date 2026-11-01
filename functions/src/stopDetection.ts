@@ -4,7 +4,11 @@ export interface PointLike {
   lat: number
   lng: number
   timestamp: { toMillis(): number }
+  /** Phase T2: GPS fix time, preferred over the write timestamp when present. */
+  tMs?: number
 }
+
+const timeOf = (p: PointLike): number => p.tMs ?? p.timestamp.toMillis()
 
 export interface StopCandidate {
   /** Index into the points array where this cluster begins (inclusive). */
@@ -48,8 +52,8 @@ export function detectStops<T extends PointLike>(
 
   const finalizeCluster = (endIdx: number) => {
     if (endIdx <= clusterStart) return
-    const arrivalMs = points[clusterStart].timestamp.toMillis()
-    const departureMs = points[endIdx].timestamp.toMillis()
+    const arrivalMs = timeOf(points[clusterStart])
+    const departureMs = timeOf(points[endIdx])
     const durationMinutes = Math.round(((departureMs - arrivalMs) / 60000) * 10) / 10
     if (durationMinutes >= minDurationMinutes) {
       stops.push({

@@ -424,7 +424,7 @@ export default function TravelClaimPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <DashboardHeader />
 
       <main className="max-w-3xl mx-auto px-4 sm:px-6 pt-6 pb-10 space-y-4">
@@ -481,7 +481,7 @@ export default function TravelClaimPage() {
               </div>
             )}
 
-            <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4 space-y-4">
+            <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-4 space-y-4">
               <div>
                 <h2 className="text-sm font-semibold text-slate-800">Distance</h2>
                 <div className="mt-2 grid grid-cols-3 gap-3">
@@ -734,7 +734,7 @@ export default function TravelClaimPage() {
             )}
 
             {viewerIsAdmin && claim.status === 'submitted' && (
-              <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4 space-y-3">
+              <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-4 space-y-3">
                 <h2 className="text-sm font-semibold text-slate-800">Manager Decision</h2>
 
                 {!showRejectForm && !showSendBackForm && (

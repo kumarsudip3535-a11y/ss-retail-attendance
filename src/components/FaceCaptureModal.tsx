@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
 import { faceVerificationService } from '@/services/faceVerificationService'
 
@@ -114,9 +115,9 @@ export default function FaceCaptureModal({
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center px-4">
-      <div className="w-full max-w-sm rounded-2xl bg-white shadow-lg p-6">
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-slate-900/45 backdrop-blur-sm flex items-center justify-center px-4">
+      <div className="w-full max-w-sm rounded-2xl bg-white shadow-lg p-6 modal-3d">
         <h2 className="text-lg font-semibold text-slate-800">
           Face Verification
         </h2>
@@ -223,6 +224,7 @@ export default function FaceCaptureModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 interface ConfirmDialogProps {
   title: string
   message: string
@@ -18,9 +19,9 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center px-4">
-      <div className="w-full max-w-sm rounded-2xl bg-white shadow-lg p-6">
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-slate-900/45 backdrop-blur-sm flex items-center justify-center px-4">
+      <div className="w-full max-w-sm rounded-2xl bg-white shadow-lg p-6 modal-3d">
         <h2 className="text-base font-semibold text-slate-800">{title}</h2>
         <p className="mt-2 text-sm text-slate-500">{message}</p>
 
@@ -43,6 +44,7 @@ export default function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

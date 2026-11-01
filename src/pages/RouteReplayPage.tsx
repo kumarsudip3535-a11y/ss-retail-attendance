@@ -14,6 +14,7 @@ import {
   updateSegmentClassification,
   updateSegmentReviewStatus,
   updateStopClassification,
+  requestDistanceRecompute,
 } from '@/services/trackingService'
 import { getTrackingConfig, DEFAULT_TRACKING_CONFIG } from '@/services/trackingConfigService'
 import { getVehicleForEmployee, resolveFuelRate } from '@/services/vehicleService'
@@ -25,7 +26,7 @@ import {
   pickDefaultReimbursementMethod,
   REIMBURSEMENT_METHOD_OPTIONS,
 } from '@/services/travelClaimService'
-import { haversineDistanceMeters } from '@/services/locationService'
+import { computeRouteDistance, pointTimeMs, sumSteps, DEFAULT_DISTANCE_OPTIONS } from '@/utils/routeDistance'
 import type {
   Employee,
   FuelRate,
@@ -342,14 +343,42 @@ export default function RouteReplayPage() {
 
   const currentPoint = points[currentIndex] ?? null
 
+  // Phase T2: same filtered algorithm as the server (src/utils/routeDistance.ts)
+  // — the old raw point-to-point sum added GPS jitter and glitch jumps.
+  const replayDistance = useMemo(
+    () =>
+      computeRouteDistance(
+        points.map((p) => ({ lat: p.lat, lng: p.lng, tMs: pointTimeMs(p), accuracy: p.accuracy ?? null, speedKmh: p.speed ?? null })),
+        { ...DEFAULT_DISTANCE_OPTIONS, maxAccuracyMeters: config.lowAccuracyThresholdMeters }
+      ),
+    [points, config.lowAccuracyThresholdMeters]
+  )
+
   const traveledDistanceKm = useMemo(() => {
     if (points.length < 2) return 0
-    let meters = 0
-    for (let i = 1; i <= currentIndex && i < points.length; i++) {
-      meters += haversineDistanceMeters(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng)
+    const soFar = sumSteps(replayDistance.steps, 0, currentIndex)
+    // The official total also includes road-distance correction for long
+    // straight-line gaps, which the browser can't compute. Scale the
+    // running figure so the replay ends exactly on the official total.
+    const official = session?.distanceAlgorithmVersion === 2 ? session.totalDistanceKm : null
+    const scale = official != null && replayDistance.meters > 0 ? (official * 1000) / replayDistance.meters : 1
+    return Math.round(((soFar * scale) / 1000) * 100) / 100
+  }, [points.length, replayDistance, currentIndex, session])
+
+  const [recomputing, setRecomputing] = useState(false)
+  async function handleRecomputeDistance() {
+    if (!session) return
+    setRecomputing(true)
+    try {
+      await requestDistanceRecompute(session.id)
+      toast.success('Recalculation requested — reload this page in about a minute to see the corrected distance.')
+    } catch (err) {
+      console.error('[RouteReplayPage] Recompute request failed:', err)
+      toast.error('Could not request a recalculation.')
+    } finally {
+      setRecomputing(false)
     }
-    return Math.round((meters / 1000) * 100) / 100
-  }, [points, currentIndex])
+  }
 
   const fullPath = useMemo<[number, number][]>(() => points.map((p) => [p.lat, p.lng]), [points])
   const traveledPath = useMemo<[number, number][]>(
@@ -482,7 +511,7 @@ export default function RouteReplayPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <DashboardHeader />
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 pt-6 pb-10 space-y-4">
@@ -505,6 +534,22 @@ export default function RouteReplayPage() {
             <div className="text-right text-sm text-slate-500 shrink-0">
               <p>{session.totalDistanceKm !== null ? `${session.totalDistanceKm} km total` : 'Distance pending'}</p>
               <p>{session.totalPoints} GPS points</p>
+              {session.status === 'completed' && session.distanceAlgorithmVersion === 2 && (session.roadCorrectedSteps ?? 0) > 0 && (
+                <p className="text-xs text-slate-400">
+                  incl. road correction on {session.roadCorrectedSteps} gap{session.roadCorrectedSteps === 1 ? '' : 's'}
+                </p>
+              )}
+              {viewerIsAdmin && session.status === 'completed' && (
+                <button
+                  type="button"
+                  onClick={handleRecomputeDistance}
+                  disabled={recomputing}
+                  className="block ml-auto mt-1 text-xs font-medium text-indigo-600 hover:underline disabled:opacity-50"
+                  title="Re-run distance, stops and segments with the latest (Phase T2) algorithm"
+                >
+                  {recomputing ? 'Requesting…' : session.distanceAlgorithmVersion === 2 ? 'Recalculate distance' : 'Recalculate distance (legacy figure)'}
+                </button>
+              )}
               {session.status === 'completed' && urlEmployeeId && attendanceLogId && (
                 <Link
                   to={`/claim/${urlEmployeeId}/${attendanceLogId}`}
@@ -527,7 +572,7 @@ export default function RouteReplayPage() {
 
         {!loading && !error && points.length > 0 && (
           <>
-            <div className="rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden">
+            <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden">
               <MapContainer center={fullPath[0]} zoom={14} style={{ height: '55vh', width: '100%' }}>
                 <TileLayer
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -586,7 +631,7 @@ export default function RouteReplayPage() {
               <InfoTile label="Address" value={currentPoint?.address ?? '—'} />
             </div>
 
-            <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4 space-y-3">
+            <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-4 space-y-3">
               <input
                 type="range"
                 min={0}
@@ -671,7 +716,7 @@ export default function RouteReplayPage() {
             </div>
 
             {segments.length > 0 && (
-              <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4 space-y-4">
+              <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-4 space-y-4">
                 <div>
                   <h2 className="text-sm font-semibold text-slate-800">Eligible Distance (Phase T7)</h2>
                   <p className="text-xs text-slate-400">
@@ -830,7 +875,7 @@ export default function RouteReplayPage() {
             )}
 
             {stops.length > 0 && (
-              <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
+              <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
                 <h2 className="text-sm font-semibold text-slate-800 mb-3">Stops ({stops.length})</h2>
                 <div className="space-y-2">
                   {stops.map((stop) => (
@@ -872,7 +917,7 @@ export default function RouteReplayPage() {
             )}
 
             {segments.length > 0 && (
-              <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
+              <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
                 <h2 className="text-sm font-semibold text-slate-800 mb-3">Route Segments ({segments.length})</h2>
                 <div className="space-y-2">
                   {segments.map((seg) => (

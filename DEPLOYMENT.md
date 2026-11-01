@@ -131,3 +131,17 @@ that `trackingConfig/default` now shows your new values.
 
 If anything errors at any step, copy the exact error text back and it'll get
 diagnosed from there — don't guess or skip ahead past an error.
+
+## Phase T2 — distance fix + 3D UI (deploy checklist)
+
+1. `firebase deploy --only firestore:rules,functions` — new `liveSessionStats` rules,
+   new `onLocationPointCreated` trigger, rewritten `onTrackingSessionClosed`.
+2. Rebuild/redeploy the web app (`npm run build`) and the Android APK (push to `main`
+   runs `.github/workflows/build-apk.yml`). The native app now samples every 10 s and
+   stamps each point with its GPS fix time — old APKs keep working but won't get the
+   timestamp fix.
+3. Correct old sessions: open Route Replay as an admin → **Recalculate distance**.
+4. Road-distance correction uses the public OSRM demo server by default
+   (`trackingConfig/default.osrmBaseUrl`). For production volume, self-host OSRM or
+   point that field at a compatible provider; set `roadDistanceCorrection: false` to
+   disable it.

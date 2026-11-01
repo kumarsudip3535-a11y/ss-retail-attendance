@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { Timestamp } from 'firebase/firestore'
@@ -74,9 +75,9 @@ export default function FuelRateFormModal({ onClose, onSaved }: FuelRateFormModa
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center px-4 py-8 overflow-y-auto">
-      <div className="w-full max-w-md rounded-2xl bg-white shadow-lg p-6">
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-slate-900/45 backdrop-blur-sm flex items-center justify-center px-4 py-8 overflow-y-auto">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-lg p-6 modal-3d">
         <h2 className="text-lg font-semibold text-slate-800">Add Fuel Rate</h2>
         <p className="mt-1 text-xs text-slate-400">
           This adds a new dated entry — it never overwrites an existing one, so past expense
@@ -172,6 +173,7 @@ export default function FuelRateFormModal({ onClose, onSaved }: FuelRateFormModa
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

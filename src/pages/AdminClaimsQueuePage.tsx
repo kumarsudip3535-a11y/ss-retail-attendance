@@ -90,7 +90,7 @@ export default function AdminClaimsQueuePage() {
   )
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <DashboardHeader />
       <AdminNavTabs />
 
@@ -110,7 +110,7 @@ export default function AdminClaimsQueuePage() {
           </div>
         )}
 
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
+        <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
           <div className="flex flex-wrap gap-2">
             {filterOptions.map((opt) => (
               <button

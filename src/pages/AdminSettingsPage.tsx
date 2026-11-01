@@ -113,7 +113,7 @@ export default function AdminSettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <DashboardHeader />
       <AdminNavTabs />
 
@@ -126,7 +126,7 @@ export default function AdminSettingsPage() {
           </p>
         </div>
 
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-6 space-y-6">
+        <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-6 space-y-6">
           {loading ? (
             <p className="text-sm text-slate-400">Loading current settings…</p>
           ) : (

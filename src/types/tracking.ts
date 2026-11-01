@@ -27,6 +27,12 @@ export interface LocationPoint {
   batteryPercent: number | null
   networkStatus: NetworkStatus
   quality: LocationPointQuality
+  /**
+   * Phase T2 distance fix: epoch ms when the GPS fix itself was taken
+   * (vs `timestamp`, when the app received it). Distance/speed math uses
+   * this — see src/utils/routeDistance.ts. Absent on older points.
+   */
+  fixTimeMs?: number | null
 }
 
 export type TrackingSessionStatus = 'active' | 'completed'
@@ -46,6 +52,26 @@ export interface TrackingSession {
   status: TrackingSessionStatus
   totalDistanceKm: number | null
   totalPoints: number
+  /** Phase T2: filtered distance before OSRM road correction (diagnostic). */
+  straightLineDistanceKm?: number | null
+  /** Phase T2: how many long straight-line steps were replaced with road distance. */
+  roadCorrectedSteps?: number | null
+  /** Phase T2: 2 = filtered + road-corrected algorithm. Missing = legacy calculation. */
+  distanceAlgorithmVersion?: number | null
+  /** Phase T2: set by an admin to make the Cloud Function re-run aggregation. */
+  recomputeRequestedAt?: Timestamp | null
+}
+
+/**
+ * Phase T2: running distance for an active shift — liveSessionStats/{sessionId},
+ * written only by the onLocationPointCreated Cloud Function.
+ */
+export interface LiveSessionStats {
+  employeeId: string
+  trackingSessionId: string
+  liveDistanceKm: number
+  pointCount: number
+  updatedAt: Timestamp | null
 }
 
 /** How a stop or segment has been classified for reimbursement purposes. */

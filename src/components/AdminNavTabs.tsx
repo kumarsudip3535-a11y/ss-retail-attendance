@@ -18,7 +18,7 @@ export default function AdminNavTabs() {
   return (
     <>
       {/* Desktop / tablet: horizontal tabs */}
-      <nav className="hidden sm:block bg-white border-b border-slate-200">
+      <nav className="glass-bar hidden sm:block bg-white border-b border-slate-200">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 flex gap-6 overflow-x-auto">
           {tabs.map((tab) => (
             <NavLink
@@ -40,7 +40,7 @@ export default function AdminNavTabs() {
       </nav>
 
       {/* Mobile: fixed bottom nav */}
-      <nav className="sm:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 pb-[env(safe-area-inset-bottom)]">
+      <nav className="sm:hidden glass-bar fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 pb-[env(safe-area-inset-bottom)]">
         <div className="flex">
           {tabs.map((tab) => (
             <NavLink

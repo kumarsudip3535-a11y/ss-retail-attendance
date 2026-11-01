@@ -11,6 +11,8 @@ interface LiveTrackingBannerProps {
    * shift can actually close out.
    */
   isFinalizingSync?: boolean
+  /** Phase T2: running distance for this shift (km), null if not available yet. */
+  liveDistanceKm?: number | null
 }
 
 /**
@@ -26,6 +28,7 @@ export default function LiveTrackingBanner({
   lastSyncAt,
   queuedCount,
   isFinalizingSync = false,
+  liveDistanceKm = null,
 }: LiveTrackingBannerProps) {
   if (!startedAt) return null
 
@@ -49,12 +52,21 @@ export default function LiveTrackingBanner({
   }
 
   return (
-    <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 flex items-start gap-3">
-      <span className="mt-1 h-2 w-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-      <div className="min-w-0">
-        <p className="text-sm font-semibold text-emerald-700">
-          LIVE TRACKING ACTIVE
-        </p>
+    <div className="tilt-tile overflow-hidden rounded-xl bg-gradient-to-br from-emerald-50 to-teal-50/80 border border-emerald-200 px-4 py-3 flex items-start gap-3 shadow-[0_12px_28px_-16px_rgba(5,150,105,0.55)]">
+      <span className="mt-1.5 h-2.5 w-2.5 rounded-full bg-emerald-500 live-dot-3d shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-sm font-semibold text-emerald-700">
+            LIVE TRACKING ACTIVE
+          </p>
+          <div className="text-right shrink-0">
+            <p className="text-lg font-bold leading-none text-emerald-700 tabular-nums">
+              {liveDistanceKm != null ? liveDistanceKm.toFixed(2) : '—'}
+              <span className="ml-0.5 text-xs font-semibold">km</span>
+            </p>
+            <p className="text-[10px] uppercase tracking-wide text-emerald-500">so far today</p>
+          </div>
+        </div>
         <p className="text-xs text-emerald-600 mt-0.5">
           Started {formatTimeIST(startedAt)}
           {lastSyncAt && <> · Last synced {formatTimeIST(lastSyncAt)}</>}

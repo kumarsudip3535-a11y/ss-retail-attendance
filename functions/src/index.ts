@@ -2,8 +2,18 @@ import { onDocumentUpdated, onDocumentCreated } from 'firebase-functions/v2/fire
 import { defineSecret } from 'firebase-functions/params'
 import { logger } from 'firebase-functions'
 import { initializeApp } from 'firebase-admin/app'
-import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore'
-import { haversineDistanceMeters, toISTDateKey, istDayRange } from './geo'
+import { getFirestore, Timestamp, FieldValue, type DocumentData } from 'firebase-admin/firestore'
+import { toISTDateKey, istDayRange } from './geo'
+import {
+  computeRouteDistance,
+  evaluateStep,
+  pointTimeMs,
+  sumSteps,
+  DEFAULT_DISTANCE_OPTIONS,
+  type DistanceOptions,
+  type DistancePoint,
+} from './routeDistance'
+import { applyRoadCorrection } from './roadDistance'
 import { reverseGeocode, sleep } from './geocode'
 import { detectStops } from './stopDetection'
 import { DEFAULT_TRACKING_CONFIG, type TrackingConfigDoc } from './config'
@@ -29,7 +39,20 @@ interface LocationPointDoc {
   lat: number
   lng: number
   timestamp: Timestamp
+  /** Phase T2: epoch ms of the GPS fix itself (absent on points written before the fix). */
+  fixTimeMs?: number | null
+  accuracy?: number | null
+  /** km/h, device-reported. */
+  speed?: number | null
   quality?: LocationPointQuality
+}
+
+function distanceOptionsFor(config: TrackingConfigDoc): DistanceOptions {
+  return {
+    ...DEFAULT_DISTANCE_OPTIONS,
+    maxAccuracyMeters: config.lowAccuracyThresholdMeters,
+    implausibleSpeedKmh: IMPLAUSIBLE_SPEED_KMH,
+  }
 }
 
 /**
@@ -224,23 +247,209 @@ async function recomputeDailySummary(
 }
 
 /**
- * Fires whenever a trackingSessions doc is updated. Only reacts to the
- * one transition that matters — active -> completed — computing:
- *   1. Total distance for the session (Haversine sum, GPS glitches filtered)
+ * Computes, for one completed session:
+ *   1. Total distance (Phase T2 filtered algorithm — see routeDistance.ts —
+ *      plus OSRM road-distance correction for long straight-line steps)
  *   2. Detected stops (dwell-radius clustering)
- *   3. Route segments between stops (login -> stop1 -> stop2 -> ... -> logout)
+ *   3. Route segments between stops (login -> stop1 -> stop2 -> ... -> logout),
+ *      using exactly the same filtered/corrected steps as the total, so the
+ *      claim's GPS distance (sum of segments) and the session total agree.
  *   4. That employee's rolled-up numbers for the whole IST calendar day
  *
  * This is the ONLY code path that writes to stops/routeSegments/
  * dailyRouteSummaries — Firestore rules deny all client writes to those
- * collections, and this function runs under the Admin SDK, which bypasses
- * rules entirely. That's what makes "employees can't edit their own GPS
- * travel records" actually true.
+ * collections, and this runs under the Admin SDK, which bypasses rules
+ * entirely. That's what makes "employees can't edit their own GPS travel
+ * records" actually true.
+ */
+async function aggregateSession(sessionId: string, session: DocumentData): Promise<void> {
+  const employeeId = session.employeeId as string
+  const sessionStartTime = session.startTime as Timestamp
+
+  logger.info(`[tracking] Aggregating closed session ${sessionId} for employee ${employeeId}`)
+
+  const config = await loadTrackingConfig()
+  const distanceOpts = distanceOptionsFor(config)
+
+  const pointsSnap = await db
+    .collection('locationPoints')
+    .where('trackingSessionId', '==', sessionId)
+    .orderBy('timestamp', 'asc')
+    .get()
+
+  // Phase T2: order by the GPS fix time, not the write time — a burst of
+  // fixes delivered late by a throttled WebView must keep its true order.
+  const points = pointsSnap.docs
+    .map((d) => ({ id: d.id, ...(d.data() as LocationPointDoc) }))
+    .map((p) => ({ ...p, tMs: pointTimeMs(p) }))
+    .sort((a, b) => a.tMs - b.tMs)
+
+  if (points.length === 0) {
+    logger.warn(`[tracking] Session ${sessionId} closed with zero location points.`)
+    await db.doc(`trackingSessions/${sessionId}`).update({ totalDistanceKm: 0, totalPoints: 0 })
+    await recomputeDailySummary(employeeId, sessionStartTime.toDate())
+    return
+  }
+
+  // --- 1. Distance ---
+  const distancePoints: DistancePoint[] = points.map((p) => ({
+    lat: p.lat,
+    lng: p.lng,
+    tMs: p.tMs,
+    accuracy: p.accuracy ?? null,
+    speedKmh: p.speed ?? null,
+  }))
+  const filtered = computeRouteDistance(distancePoints, distanceOpts)
+  const road = await applyRoadCorrection(distancePoints, filtered.steps, {
+    enabled: config.roadDistanceCorrection,
+    osrmBaseUrl: config.osrmBaseUrl,
+    maxDetourRatio: 2.5,
+    maxCorrectionsPerSession: 400,
+    gapMeters: distanceOpts.gapMeters,
+    implausibleSpeedKmh: IMPLAUSIBLE_SPEED_KMH,
+  })
+  const steps = road.steps
+
+  // Persist the glitch flag onto the point docs (Admin SDK bypasses the
+  // client-facing `allow update: if false` rule on purpose). Only ever
+  // escalates a point to needs_review — never downgrades an earlier flag.
+  const glitchPointIds = new Set(filtered.glitchIdx.map((i) => points[i].id))
+  if (glitchPointIds.size > 0) {
+    let glitchBatch = db.batch()
+    let ops = 0
+    for (const p of points) {
+      if (glitchPointIds.has(p.id) && p.quality !== 'needs_review') {
+        glitchBatch.update(db.doc(`locationPoints/${p.id}`), { quality: 'needs_review' })
+        p.quality = 'needs_review'
+        if (++ops === 450) {
+          await glitchBatch.commit()
+          glitchBatch = db.batch()
+          ops = 0
+        }
+      }
+    }
+    if (ops > 0) await glitchBatch.commit()
+    logger.info(`[tracking] Session ${sessionId}: flagged ${glitchPointIds.size} implausible-speed point(s) needs_review.`)
+  }
+
+  // --- 2. Stop detection ---
+  const stopCandidates = detectStops(points, config.stopRadiusMeters, config.stopMinDurationMinutes)
+
+  await deleteExistingDerived(sessionId)
+
+  const writtenStops: { id: string; address: string | null; startIdx: number; endIdx: number }[] = []
+  for (const candidate of stopCandidates) {
+    const address = await reverseGeocode(candidate.lat, candidate.lng)
+    if (stopCandidates.indexOf(candidate) < stopCandidates.length - 1) {
+      await sleep(1100) // respect Nominatim's ~1 req/sec usage policy
+    }
+
+    const stopRef = db.collection('stops').doc()
+    await stopRef.set({
+      trackingSessionId: sessionId,
+      employeeId,
+      arrivalTime: Timestamp.fromMillis(candidate.arrivalMs),
+      departureTime: Timestamp.fromMillis(candidate.departureMs),
+      lat: candidate.lat,
+      lng: candidate.lng,
+      address,
+      durationMinutes: candidate.durationMinutes,
+      customerName: null,
+      purpose: null,
+      classification: 'other',
+    })
+    writtenStops.push({ id: stopRef.id, address, startIdx: candidate.startIdx, endIdx: candidate.endIdx })
+  }
+
+  // --- 3. Route segments between stops ---
+  type Boundary = { idx: number; stopId: string | null; label: string }
+  const boundaries: Boundary[] = [{ idx: 0, stopId: null, label: 'Login Location' }]
+  writtenStops.forEach((stop) => {
+    boundaries.push({ idx: stop.startIdx, stopId: stop.id, label: stop.address ?? 'Stop' })
+    boundaries.push({ idx: stop.endIdx, stopId: stop.id, label: stop.address ?? 'Stop' })
+  })
+  boundaries.push({ idx: points.length - 1, stopId: null, label: 'Logout Location' })
+
+  const segmentBatch = db.batch()
+  // Phase T2: the session total is the sum of its travel segments, so
+  // GPS drift while parked at a detected stop never counts as distance,
+  // and the total always equals what a travel claim adds up.
+  let travelMeters = 0
+  let travelStraightMeters = 0
+  // Walk boundary pairs (start-of-travel -> end-of-travel): skip the
+  // zero-length pairs that fall *inside* a stop.
+  for (let i = 0; i + 1 < boundaries.length; i += 2) {
+    const from = boundaries[i]
+    const to = boundaries[i + 1]
+    if (to.idx <= from.idx) continue
+
+    // Phase T2: same filtered + road-corrected steps as the session total.
+    const segmentDistanceMeters = sumSteps(steps, from.idx, to.idx)
+    travelMeters += segmentDistanceMeters
+    travelStraightMeters += sumSteps(filtered.steps, from.idx, to.idx)
+    const travelTimeMinutes = Math.round(((points[to.idx].tMs - points[from.idx].tMs) / 60000) * 10) / 10
+
+    // Quality is summarized over every point in this segment's travel
+    // span; an admin decides via reviewStatus whether to exclude the leg.
+    const { qualityFlag, flaggedPointCount } = summarizeSegmentQuality(points.slice(from.idx, to.idx + 1))
+
+    const segmentRef = db.collection('routeSegments').doc()
+    segmentBatch.set(segmentRef, {
+      trackingSessionId: sessionId,
+      employeeId,
+      fromStopId: from.stopId,
+      toStopId: to.stopId,
+      fromLabel: from.label,
+      toLabel: to.label,
+      distanceKm: Math.round((segmentDistanceMeters / 1000) * 1000) / 1000,
+      travelTimeMinutes,
+      startTime: points[from.idx].timestamp,
+      endTime: points[to.idx].timestamp,
+      classification: 'other',
+      qualityFlag,
+      flaggedPointCount,
+      reviewStatus: qualityFlag ? 'unreviewed' : 'verified',
+    })
+  }
+  await segmentBatch.commit()
+
+  const totalDistanceKm = Math.round((travelMeters / 1000) * 100) / 100
+  const straightLineKm = Math.round((travelStraightMeters / 1000) * 100) / 100
+
+  // --- Update the session's own aggregate fields ---
+  await db.doc(`trackingSessions/${sessionId}`).update({
+    totalDistanceKm,
+    totalPoints: points.length,
+    straightLineDistanceKm: straightLineKm,
+    roadCorrectedSteps: road.corrected,
+    distanceAlgorithmVersion: 2,
+    distanceComputedAt: FieldValue.serverTimestamp(),
+  })
+
+  // --- 4. Whole-day rollup ---
+  await recomputeDailySummary(employeeId, sessionStartTime.toDate())
+
+  logger.info(
+    `[tracking] Session ${sessionId} aggregated: ${totalDistanceKm}km ` +
+      `(straight-line ${straightLineKm}km, ${road.corrected} step(s) road-corrected), ` +
+      `${writtenStops.length} stops, ${points.length} points.`
+  )
+}
+
+/**
+ * Fires whenever a trackingSessions doc is updated. Reacts to:
+ *   - active -> completed (normal punch-out), and
+ *   - Phase T2: an admin setting/changing `recomputeRequestedAt` on an
+ *     already-completed session (the "Recalculate distance" button on
+ *     Route Replay) — re-runs the whole pipeline with the current
+ *     algorithm, which is how sessions recorded before this fix get
+ *     corrected numbers. aggregateSession never touches that field, so
+ *     its own writes can't re-trigger this.
  */
 export const onTrackingSessionClosed = onDocumentUpdated(
   {
     document: 'trackingSessions/{sessionId}',
-    timeoutSeconds: 120,
+    timeoutSeconds: 300,
     memory: '256MiB',
   },
   async (event) => {
@@ -249,168 +458,101 @@ export const onTrackingSessionClosed = onDocumentUpdated(
     const after = event.data?.after.data()
     if (!before || !after) return
 
-    if (before.status === 'completed' || after.status !== 'completed') {
-      return // not the transition we care about
+    const justClosed = before.status !== 'completed' && after.status === 'completed'
+    const beforeReq = (before.recomputeRequestedAt as Timestamp | undefined)?.toMillis() ?? null
+    const afterReq = (after.recomputeRequestedAt as Timestamp | undefined)?.toMillis() ?? null
+    const recomputeRequested = after.status === 'completed' && afterReq !== null && afterReq !== beforeReq
+
+    if (!justClosed && !recomputeRequested) return
+    await aggregateSession(sessionId, after)
+  }
+)
+
+/** Small in-memory cache so the per-point trigger doesn't re-read config every fix. */
+let cachedConfig: { value: TrackingConfigDoc; at: number } | null = null
+async function loadTrackingConfigCached(): Promise<TrackingConfigDoc> {
+  if (cachedConfig && Date.now() - cachedConfig.at < 5 * 60_000) return cachedConfig.value
+  const value = await loadTrackingConfig()
+  cachedConfig = { value, at: Date.now() }
+  return value
+}
+
+/**
+ * Phase T2: live running distance while a shift is still active. Before
+ * this, distance only existed after punch-out — the admin live map and the
+ * employee's banner had nothing to show mid-trip. Each new point is run
+ * through the same evaluateStep() rules as the final computation and
+ * added to `liveDistanceKm` on liveSessionStats/{sessionId}. (Straight-line only — the
+ * road correction happens once, at punch-out, so the final figure can be
+ * a little higher than the last live reading.)
+ *
+ * Out-of-order points (an older offline-queued fix arriving after newer
+ * ones) are skipped here; the final aggregation still includes them.
+ */
+export const onLocationPointCreated = onDocumentCreated(
+  {
+    document: 'locationPoints/{pointId}',
+    timeoutSeconds: 30,
+    memory: '256MiB',
+  },
+  async (event) => {
+    const data = event.data?.data() as (LocationPointDoc & { trackingSessionId?: string }) | undefined
+    if (!data?.trackingSessionId) return
+    const config = await loadTrackingConfigCached()
+    const opts = distanceOptionsFor(config)
+    const candidate: DistancePoint = {
+      lat: data.lat,
+      lng: data.lng,
+      tMs: pointTimeMs(data),
+      accuracy: data.accuracy ?? null,
+      speedKmh: data.speed ?? null,
     }
+    const sessionRef = db.doc(`trackingSessions/${data.trackingSessionId}`)
+    // Kept in its own collection (not on the session doc) so these
+    // per-point writes don't fire onTrackingSessionClosed every few seconds.
+    const statsRef = db.doc(`liveSessionStats/${data.trackingSessionId}`)
 
-    const employeeId = after.employeeId as string
-    const sessionStartTime = after.startTime as Timestamp
-
-    logger.info(`[tracking] Aggregating closed session ${sessionId} for employee ${employeeId}`)
-
-    const config = await loadTrackingConfig()
-
-    const pointsSnap = await db
-      .collection('locationPoints')
-      .where('trackingSessionId', '==', sessionId)
-      .orderBy('timestamp', 'asc')
-      .get()
-
-    const points = pointsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as LocationPointDoc) }))
-
-    if (points.length === 0) {
-      logger.warn(`[tracking] Session ${sessionId} closed with zero location points.`)
-      await db.doc(`trackingSessions/${sessionId}`).update({ totalDistanceKm: 0, totalPoints: 0 })
-      await recomputeDailySummary(employeeId, sessionStartTime.toDate())
-      return
-    }
-
-    // --- 1. Distance ---
-    let totalDistanceMeters = 0
-    const glitchPointIds = new Set<string>()
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1]
-      const curr = points[i]
-      const distMeters = haversineDistanceMeters(prev.lat, prev.lng, curr.lat, curr.lng)
-      const seconds = (curr.timestamp.toMillis() - prev.timestamp.toMillis()) / 1000
-      const impliedSpeedKmh = seconds > 0 ? distMeters / 1000 / (seconds / 3600) : 0
-
-      if (impliedSpeedKmh > IMPLAUSIBLE_SPEED_KMH) {
-        glitchPointIds.add(curr.id) // GPS glitch — excluded from the sum, flagged below
-        continue
+    await db.runTransaction(async (tx) => {
+      const [sessionSnap, statsSnap] = await Promise.all([tx.get(sessionRef), tx.get(statsRef)])
+      if (!sessionSnap.exists || sessionSnap.get('status') !== 'active') return
+      const s = (statsSnap.exists ? statsSnap.data() : {}) as {
+        liveDistanceKm?: number
+        anchor?: DistancePoint
+        rejectStreak?: number
+        pointCount?: number
       }
-      totalDistanceMeters += distMeters
-    }
-    const totalDistanceKm = Math.round((totalDistanceMeters / 1000) * 100) / 100
-
-    // Phase T11: actually persist the glitch flag onto the point docs (the
-    // previous version of this comment claimed this already happened — it
-    // didn't). Admin SDK bypasses locationPoints' `allow update: if false`
-    // rule on purpose: that rule stops a *client* from rewriting what it
-    // reported, not this pipeline from marking a reading as suspect. Also
-    // patch the in-memory copy so the segment loop below sees it — points
-    // is read once, before this runs.
-    if (glitchPointIds.size > 0) {
-      const glitchBatch = db.batch()
-      for (const p of points) {
-        if (glitchPointIds.has(p.id)) {
-          glitchBatch.update(db.doc(`locationPoints/${p.id}`), { quality: 'needs_review' })
-          p.quality = 'needs_review'
-        }
+      const base = {
+        employeeId: sessionSnap.get('employeeId') as string,
+        trackingSessionId: data.trackingSessionId,
+        pointCount: (s.pointCount ?? 0) + 1,
+        updatedAt: FieldValue.serverTimestamp(),
       }
-      await glitchBatch.commit()
-      logger.info(`[tracking] Session ${sessionId}: flagged ${glitchPointIds.size} implausible-speed point(s) needs_review.`)
-    }
-
-    // --- 2. Stop detection ---
-    const stopCandidates = detectStops(points, config.stopRadiusMeters, config.stopMinDurationMinutes)
-
-    await deleteExistingDerived(sessionId)
-
-    const writtenStops: { id: string; address: string | null; startIdx: number; endIdx: number }[] = []
-    for (const candidate of stopCandidates) {
-      const address = await reverseGeocode(candidate.lat, candidate.lng)
-      if (stopCandidates.indexOf(candidate) < stopCandidates.length - 1) {
-        await sleep(1100) // respect Nominatim's ~1 req/sec usage policy
+      const anchor = s.anchor
+      if (!anchor) {
+        const usable = !(candidate.accuracy != null && candidate.accuracy > opts.maxAccuracyMeters)
+        tx.set(statsRef, { ...base, liveDistanceKm: 0, rejectStreak: 0, ...(usable ? { anchor: candidate } : {}) }, { merge: true })
+        return
+      }
+      if (candidate.tMs <= anchor.tMs) {
+        tx.set(statsRef, base, { merge: true }) // late/out-of-order — final aggregation handles it
+        return
       }
 
-      const stopRef = db.collection('stops').doc()
-      await stopRef.set({
-        trackingSessionId: sessionId,
-        employeeId,
-        arrivalTime: Timestamp.fromMillis(candidate.arrivalMs),
-        departureTime: Timestamp.fromMillis(candidate.departureMs),
-        lat: candidate.lat,
-        lng: candidate.lng,
-        address,
-        durationMinutes: candidate.durationMinutes,
-        customerName: null,
-        purpose: null,
-        classification: 'other',
-      })
-      writtenStops.push({ id: stopRef.id, address, startIdx: candidate.startIdx, endIdx: candidate.endIdx })
-    }
-
-    // --- 3. Route segments between stops ---
-    type Boundary = { idx: number; stopId: string | null; label: string }
-    const boundaries: Boundary[] = [{ idx: 0, stopId: null, label: 'Login Location' }]
-    writtenStops.forEach((stop) => {
-      boundaries.push({ idx: stop.startIdx, stopId: stop.id, label: stop.address ?? 'Stop' })
-      boundaries.push({ idx: stop.endIdx, stopId: stop.id, label: stop.address ?? 'Stop' })
-    })
-    boundaries.push({ idx: points.length - 1, stopId: null, label: 'Logout Location' })
-
-    const segmentBatch = db.batch()
-    // Walk boundary pairs (start-of-travel -> end-of-travel): skip the
-    // zero-length pairs that fall *inside* a stop (a stop's own
-    // startIdx->endIdx span isn't a travel segment).
-    for (let i = 0; i + 1 < boundaries.length; i += 2) {
-      const from = boundaries[i]
-      const to = boundaries[i + 1]
-      if (to.idx <= from.idx) continue
-
-      let segmentDistanceMeters = 0
-      for (let p = from.idx + 1; p <= to.idx; p++) {
-        segmentDistanceMeters += haversineDistanceMeters(
-          points[p - 1].lat,
-          points[p - 1].lng,
-          points[p].lat,
-          points[p].lng
+      const verdict = evaluateStep(anchor, candidate, opts)
+      if (verdict.kind === 'accept') {
+        const km = Math.round(((s.liveDistanceKm ?? 0) + verdict.meters / 1000) * 1000) / 1000
+        tx.set(statsRef, { ...base, liveDistanceKm: km, anchor: candidate, rejectStreak: 0 }, { merge: true })
+      } else if (verdict.kind === 'glitch') {
+        const streak = (s.rejectStreak ?? 0) + 1
+        tx.set(
+          statsRef,
+          streak >= opts.reanchorAfterRejects ? { ...base, anchor: candidate, rejectStreak: 0 } : { ...base, rejectStreak: streak },
+          { merge: true }
         )
+      } else {
+        tx.set(statsRef, { ...base, ...(verdict.kind === 'jitter' ? { rejectStreak: 0 } : {}) }, { merge: true })
       }
-      const travelTimeMinutes =
-        Math.round(((points[to.idx].timestamp.toMillis() - points[from.idx].timestamp.toMillis()) / 60000) * 10) / 10
-
-      // Phase T11: quality is summarized over every point *in* this
-      // segment's travel span (from.idx..to.idx inclusive) — deliberately
-      // not filtered out of segmentDistanceMeters above. Auto-dropping
-      // individual glitch points from a segment's own distance is fragile;
-      // instead the segment is flagged and an admin decides via
-      // reviewStatus whether to exclude the whole leg from KM/expense math.
-      const { qualityFlag, flaggedPointCount } = summarizeSegmentQuality(points.slice(from.idx, to.idx + 1))
-
-      const segmentRef = db.collection('routeSegments').doc()
-      segmentBatch.set(segmentRef, {
-        trackingSessionId: sessionId,
-        employeeId,
-        fromStopId: from.stopId,
-        toStopId: to.stopId,
-        fromLabel: from.label,
-        toLabel: to.label,
-        distanceKm: Math.round((segmentDistanceMeters / 1000) * 1000) / 1000,
-        travelTimeMinutes,
-        startTime: points[from.idx].timestamp,
-        endTime: points[to.idx].timestamp,
-        classification: 'other',
-        qualityFlag,
-        flaggedPointCount,
-        reviewStatus: qualityFlag ? 'unreviewed' : 'verified',
-      })
-    }
-    await segmentBatch.commit()
-
-    // --- Update the session's own aggregate fields ---
-    await db.doc(`trackingSessions/${sessionId}`).update({
-      totalDistanceKm,
-      totalPoints: points.length,
     })
-
-    // --- 4. Whole-day rollup ---
-    await recomputeDailySummary(employeeId, sessionStartTime.toDate())
-
-    logger.info(
-      `[tracking] Session ${sessionId} aggregated: ${totalDistanceKm}km, ${writtenStops.length} stops, ${points.length} points.`
-    )
   }
 )
 

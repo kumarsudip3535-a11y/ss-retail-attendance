@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import type { Advance, Employee } from '@/types'
 import { formatDateIST } from '@/hooks/useClock'
 
@@ -27,9 +28,9 @@ export default function AdvanceHistoryModal({ employee, advances, onClose, onGiv
     .filter((a) => a.status === 'outstanding')
     .reduce((sum, a) => sum + a.remainingBalance, 0)
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center px-4 py-8 overflow-y-auto">
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-lg p-6">
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-slate-900/45 backdrop-blur-sm flex items-center justify-center px-4 py-8 overflow-y-auto">
+      <div className="w-full max-w-lg rounded-2xl bg-white shadow-lg p-6 modal-3d">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-800">
@@ -85,6 +86,7 @@ export default function AdvanceHistoryModal({ employee, advances, onClose, onGiv
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

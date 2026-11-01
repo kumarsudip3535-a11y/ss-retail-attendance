@@ -139,12 +139,12 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <DashboardHeader />
       <AdminNavTabs />
 
       <main className="max-w-5xl mx-auto px-4 sm:px-6 pt-6 pb-24 sm:pb-6">
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
+        <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-lg font-semibold text-slate-800">Reports</h1>
             <button

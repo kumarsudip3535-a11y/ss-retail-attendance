@@ -39,9 +39,23 @@ function SummaryCard({
           : 'text-slate-800'
 
   return (
-    <div className="rounded-xl bg-white border border-slate-200 p-4">
-      <p className="text-xs text-slate-400">{label}</p>
-      <p className={`mt-1 text-2xl font-semibold ${valueColor}`}>{value}</p>
+    <div className="tilt-tile overflow-hidden rounded-xl bg-white/75 backdrop-blur-md border border-white/70 p-4 shadow-[0_10px_28px_-14px_rgba(49,46,129,0.35)]">
+      <span
+        aria-hidden="true"
+        className={`absolute inset-x-0 top-0 h-1 ${
+          accent === 'emerald'
+            ? 'bg-gradient-to-r from-emerald-400 to-teal-400'
+            : accent === 'red'
+              ? 'bg-gradient-to-r from-rose-400 to-red-500'
+              : accent === 'amber'
+                ? 'bg-gradient-to-r from-amber-300 to-orange-400'
+                : 'bg-gradient-to-r from-indigo-400 to-sky-400'
+        }`}
+      />
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</p>
+      <p className={`mt-1 text-3xl font-bold tabular-nums ${valueColor} [text-shadow:0_2px_0_rgba(255,255,255,0.9),0_8px_16px_rgba(49,46,129,0.18)]`}>
+        {value}
+      </p>
     </div>
   )
 }
@@ -206,7 +220,7 @@ export default function AdminDashboardPage() {
   }, [tableLogs, statusFilter, searchQuery, employeeById])
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <DashboardHeader />
       <AdminNavTabs />
 
@@ -260,7 +274,7 @@ export default function AdminDashboardPage() {
           )}
         </div>
 
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
+        <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
           <div className="flex flex-wrap items-center gap-3 justify-between">
             <h2 className="text-base font-semibold text-slate-800">
               Attendance Records

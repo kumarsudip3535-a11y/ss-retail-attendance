@@ -252,12 +252,44 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm rounded-2xl bg-white shadow-sm border border-slate-200 p-8">
+    <div className="min-h-screen px-4 sm:px-8 lg:px-20 pt-[34vh] pb-10 sm:pt-[38vh] lg:py-10 flex flex-col items-center lg:items-start lg:justify-center gap-8">
+      {/* Copy column — on large screens the 3D route globe (Background3D,
+          'hero' variant) fills the right half of the viewport. */}
+      <div className="hidden lg:block max-w-md login-card-3d [animation-delay:0.15s]">
+        <p className="inline-flex items-center gap-2 rounded-full bg-white/70 backdrop-blur px-3 py-1 text-xs font-semibold text-emerald-700 border border-white/80 shadow-sm">
+          <span className="h-2 w-2 rounded-full bg-emerald-500 live-dot-3d" />
+          Live field tracking
+        </p>
+        <h1 className="mt-4 text-4xl xl:text-5xl font-extrabold leading-[1.05] tracking-tight text-slate-900">
+          Every shift.
+          <br />
+          Every stop.
+          <br />
+          <span className="text-gradient-3d">Every kilometre.</span>
+        </h1>
+        <p className="mt-4 text-sm text-slate-500 max-w-sm">
+          Attendance, live GPS routes and travel claims for SS Retail Services field teams — in one place.
+        </p>
+        <div className="mt-5 grid grid-cols-3 gap-3 max-w-sm">
+          {[
+            ['GPS', 'Punch-in geofence'],
+            ['Live', 'Route & distance'],
+            ['₹', 'Auto travel claims'],
+          ].map(([big, small]) => (
+            <div key={small} className="tilt-tile rounded-xl bg-white/70 backdrop-blur border border-white/80 px-3 py-3 shadow-[0_10px_24px_-14px_rgba(49,46,129,0.4)]">
+              <p className="text-lg font-bold text-indigo-600">{big}</p>
+              <p className="text-[11px] leading-tight text-slate-500">{small}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="w-full max-w-sm">
+      <div className="w-full login-card-3d card-3d rounded-3xl bg-white shadow-sm border border-slate-200 p-8">
         <img
           src="/logo.svg"
           alt="SS Retail Services"
-          className="h-10 w-auto mx-auto block"
+          className="h-10 w-auto mx-auto block drop-shadow-[0_6px_12px_rgba(67,56,202,0.25)]"
         />
         <p className="mt-2 text-sm text-slate-500 text-center">
           Employee Attendance Management System
@@ -298,7 +330,7 @@ export default function LoginPage() {
             <button
               onClick={handleSendOtp}
               disabled={submitting}
-              className="w-full rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-medium py-2.5 transition-colors"
+              className="btn-3d w-full rounded-xl bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-semibold py-3"
             >
               {submitting ? 'Sending…' : 'Send OTP'}
             </button>
@@ -339,7 +371,7 @@ export default function LoginPage() {
             <button
               onClick={handleVerifyOtp}
               disabled={submitting}
-              className="w-full rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-medium py-2.5 transition-colors"
+              className="btn-3d w-full rounded-xl bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm font-semibold py-3"
             >
               {submitting ? 'Verifying…' : 'Verify OTP'}
             </button>
@@ -368,6 +400,7 @@ export default function LoginPage() {
             Download Android App (APK)
           </a>
         )}
+      </div>
       </div>
     </div>
   )

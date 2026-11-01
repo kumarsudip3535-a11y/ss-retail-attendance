@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { createEmployee, updateEmployee } from '@/services/employeeService'
@@ -164,9 +165,9 @@ export default function EmployeeFormModal({
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center px-4 py-8 overflow-y-auto">
-      <div className="w-full max-w-md rounded-2xl bg-white shadow-lg p-6">
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-slate-900/45 backdrop-blur-sm flex items-center justify-center px-4 py-8 overflow-y-auto">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-lg p-6 modal-3d">
         <h2 className="text-lg font-semibold text-slate-800">
           {isEditing ? 'Edit Employee' : 'Add Employee'}
         </h2>
@@ -385,6 +386,7 @@ export default function EmployeeFormModal({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

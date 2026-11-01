@@ -99,7 +99,7 @@ export default function AdminPayrollPage() {
   const historyRow = rows.find((r) => r.employee.id === historyEmployeeId) ?? null
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <DashboardHeader />
       <AdminNavTabs />
 
@@ -134,7 +134,7 @@ export default function AdminPayrollPage() {
           <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">{error}</div>
         )}
 
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
+        <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
           {loading && (
             <table className="w-full text-sm">
               <tbody>

@@ -97,6 +97,17 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Phase T2: running distance for an active shift, maintained only by
+    // the onLocationPointCreated Cloud Function (Admin SDK). Read-only to
+    // the employee it belongs to and to admins.
+    // `resource == null` lets a listener attach before the first point has
+    // been processed (doc not created yet) — otherwise the very first
+    // snapshot is permission-denied and the listener dies for good.
+    match /liveSessionStats/{sessionId} {
+      allow read: if isSignedIn() && (resource == null || isSelf(resource.data.employeeId) || isAdmin());
+      allow write: if false;
+    }
+
     match /locationPoints/{pointId} {
       allow read: if isSignedIn() && (isSelf(resource.data.employeeId) || isAdmin());
 

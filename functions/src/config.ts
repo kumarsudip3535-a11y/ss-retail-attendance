@@ -11,6 +11,10 @@ export interface TrackingConfigDoc {
   lowAccuracyThresholdMeters: number
   stopMinDurationMinutes: number
   stopRadiusMeters: number
+  /** Phase T2 distance fix: replace long straight-line GPS steps with OSRM road distance. */
+  roadDistanceCorrection: boolean
+  /** OSRM-compatible routing endpoint (default: public demo server — self-host for production). */
+  osrmBaseUrl: string
 }
 
 export const DEFAULT_TRACKING_CONFIG: TrackingConfigDoc = {
@@ -20,4 +24,6 @@ export const DEFAULT_TRACKING_CONFIG: TrackingConfigDoc = {
   lowAccuracyThresholdMeters: 100,
   stopMinDurationMinutes: 10,
   stopRadiusMeters: 200,
+  roadDistanceCorrection: true,
+  osrmBaseUrl: 'https://router.project-osrm.org',
 }

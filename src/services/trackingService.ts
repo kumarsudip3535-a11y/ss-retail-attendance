@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore'
 import { getFirebaseDb } from '@/services/firebase'
 import type {
+  LiveSessionStats,
   DailyRouteSummary,
   LocationPoint,
   RouteSegment,
@@ -115,6 +116,9 @@ export async function getActiveTrackingSession(
     status: data.status,
     totalDistanceKm: data.totalDistanceKm ?? null,
     totalPoints: data.totalPoints ?? 0,
+    straightLineDistanceKm: data.straightLineDistanceKm ?? null,
+    roadCorrectedSteps: data.roadCorrectedSteps ?? null,
+    distanceAlgorithmVersion: data.distanceAlgorithmVersion ?? null,
   }
 }
 
@@ -164,6 +168,9 @@ export async function getTrackingSessionByAttendanceLogId(
     status: data.status,
     totalDistanceKm: data.totalDistanceKm ?? null,
     totalPoints: data.totalPoints ?? 0,
+    straightLineDistanceKm: data.straightLineDistanceKm ?? null,
+    roadCorrectedSteps: data.roadCorrectedSteps ?? null,
+    distanceAlgorithmVersion: data.distanceAlgorithmVersion ?? null,
   }
 }
 
@@ -178,6 +185,9 @@ function docToSession(docSnap: { id: string; data: () => Record<string, unknown>
     status: data.status as TrackingSession['status'],
     totalDistanceKm: (data.totalDistanceKm as number | null) ?? null,
     totalPoints: (data.totalPoints as number) ?? 0,
+    straightLineDistanceKm: (data.straightLineDistanceKm as number | null) ?? null,
+    roadCorrectedSteps: (data.roadCorrectedSteps as number | null) ?? null,
+    distanceAlgorithmVersion: (data.distanceAlgorithmVersion as number | null) ?? null,
   }
 }
 
@@ -500,4 +510,35 @@ export async function getTrackingSessionById(sessionId: string): Promise<Trackin
   const snap = await getDoc(doc(db, SESSIONS_COLLECTION, sessionId))
   if (!snap.exists()) return null
   return docToSession(snap)
+}
+
+/**
+ * Phase T2: live running distance for an active session (maintained by
+ * the onLocationPointCreated Cloud Function). Calls back with null until
+ * the first point has been processed.
+ */
+export function subscribeToLiveSessionStats(
+  sessionId: string,
+  onChange: (stats: LiveSessionStats | null) => void
+): Unsubscribe {
+  const db = getFirebaseDb()
+  return onSnapshot(
+    doc(db, 'liveSessionStats', sessionId),
+    (snap) => onChange(snap.exists() ? (snap.data() as LiveSessionStats) : null),
+    (error) => {
+      // Missing rules/function deploy shouldn't break the page — just no live km.
+      console.warn('[trackingService] liveSessionStats subscription failed:', error)
+      onChange(null)
+    }
+  )
+}
+
+/**
+ * Phase T2: admin-only — asks the Cloud Function to re-run distance/stop/
+ * segment aggregation for a completed session with the current algorithm
+ * (used to correct sessions recorded before the distance fix).
+ */
+export async function requestDistanceRecompute(sessionId: string): Promise<void> {
+  const db = getFirebaseDb()
+  await updateDoc(doc(db, SESSIONS_COLLECTION, sessionId), { recomputeRequestedAt: Timestamp.now() })
 }

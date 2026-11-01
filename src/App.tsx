@@ -3,6 +3,8 @@ import { Toaster } from 'react-hot-toast'
 import { AuthProvider } from '@/context/AuthContext'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import ProtectedRoute from '@/components/ProtectedRoute'
+import Background3D from '@/components/Background3D'
+import TiltController from '@/components/TiltController'
 import LoginPage from '@/pages/LoginPage'
 import EmployeeDashboardPage from '@/pages/EmployeeDashboardPage'
 import AdminDashboardPage from '@/pages/AdminDashboardPage'
@@ -25,6 +27,9 @@ function App() {
     <ErrorBoundary>
       <BrowserRouter>
         <AuthProvider>
+          {/* 3D animated backdrop + pointer-driven card tilt (see index.css "3D animated UI layer"). */}
+          <Background3D />
+          <TiltController />
           <Toaster position="top-center" />
           <Routes>
             <Route path="/login" element={<LoginPage />} />

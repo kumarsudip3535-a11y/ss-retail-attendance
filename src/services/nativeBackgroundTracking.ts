@@ -40,6 +40,8 @@ export interface NativePoint {
 }
 
 let watcherActive = false
+/** Phase T2: fix time of the last point handed to onPoint (JS-side sampling throttle). */
+let lastDeliveredFixMs = 0
 
 /**
  * Starts the native foreground-service watcher. `onPoint` is called for
@@ -60,6 +62,7 @@ export async function startNativeBackgroundTracking(
   onPoint: (point: NativePoint) => void,
   onError: (error: CallbackError) => void
 ): Promise<void> {
+  lastDeliveredFixMs = 0
   await BackgroundGeolocation.start(
     {
       // Non-empty backgroundMessage is what tells the plugin to keep
@@ -81,13 +84,20 @@ export async function startNativeBackgroundTracking(
         return
       }
       if (!location) return
+      // Phase T2: the plugin's minIntervalMs only gates its *native POST*
+      // path — the JS callback still receives every provider update
+      // (often 1/sec). Throttle here by the fix's own time so we sample
+      // densely enough to follow curves without flooding Firestore.
+      const fixMs = typeof location.time === 'number' ? location.time : Date.now()
+      if (lastDeliveredFixMs && fixMs - lastDeliveredFixMs < minIntervalMs) return
+      lastDeliveredFixMs = fixMs
       onPoint({
         lat: location.latitude,
         lng: location.longitude,
         accuracy: location.accuracy ?? null,
         speedKmh: location.speed != null ? Math.round(location.speed * 3.6 * 10) / 10 : null,
         bearing: location.bearing ?? null,
-        timeMs: location.time ?? null,
+        timeMs: fixMs,
       })
     }
   )

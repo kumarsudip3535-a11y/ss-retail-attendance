@@ -7,6 +7,7 @@ import {
   getActiveTrackingSession,
   getTrackingSessionStatus,
   recordLocationPoint,
+  subscribeToLiveSessionStats,
 } from '@/services/trackingService'
 import {
   enqueuePoint,
@@ -40,6 +41,18 @@ import {
  * during a shift.
  */
 const BASE_INTERVAL_MS = 20_000 // 20s
+/**
+ * Phase T2: the native foreground service gets fixes continuously, so it
+ * can afford to sample more densely (follows curves/turns closely) — the
+ * JS-side throttle in nativeBackgroundTracking.ts enforces this.
+ */
+const NATIVE_BASE_INTERVAL_MS = 10_000 // 10s
+/**
+ * Phase T2: a GPS fix time more than this far from "now" is treated as
+ * untrustworthy (device clock wrong / stale cached fix) and the receive
+ * time is used for `timestamp` instead.
+ */
+const MAX_FIX_CLOCK_SKEW_MS = 6 * 60 * 60 * 1000
 /** Wider interval once battery drops below the threshold, to conserve it. */
 const LOW_BATTERY_INTERVAL_MS = 90_000 // 90s
 const LOW_BATTERY_THRESHOLD_PERCENT = 20
@@ -60,6 +73,12 @@ interface UseLiveTrackingResult {
    * purely "still uploading what was already captured."
    */
   isFinalizingSync: boolean
+  /**
+   * Phase T2: running distance for the current shift (km), from the
+   * server-side liveSessionStats doc — null until the first point has
+   * been processed (or if the Cloud Function isn't deployed yet).
+   */
+  liveDistanceKm: number | null
   /** Starts a new session tied to a fresh punch-in. */
   start: (employeeId: string, attendanceLogId: string) => Promise<void>
   /** Ends the current session (called on punch-out) — see doc comment on `stop` below for the deferred-close behavior. */
@@ -280,6 +299,7 @@ export function useLiveTracking(
   const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null)
   const [queuedCount, setQueuedCount] = useState(0)
   const [isFinalizingSync, setIsFinalizingSync] = useState(false)
+  const [liveDistanceKm, setLiveDistanceKm] = useState<number | null>(null)
 
   const employeeIdRef = useRef<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
@@ -356,8 +376,21 @@ export function useLiveTracking(
       accuracy: number | null
       speedKmh: number | null
       direction: number | null
+      /** Phase T2: epoch ms the fix was taken, if the source reports it. */
+      fixTimeMs: number | null
     }) => {
       if (!sessionIdRef.current || !employeeIdRef.current) return
+
+      // Phase T2 distance fix: stamp the point with when the GPS fix was
+      // actually taken, not when JS got around to receiving it. Android
+      // can hand over several fixes at once after the WebView was
+      // throttled; with receive-time stamps those looked like impossible
+      // jumps and were thrown out of the distance total.
+      const nowMs = Date.now()
+      const fixTimeMs =
+        input.fixTimeMs != null && Math.abs(nowMs - input.fixTimeMs) <= MAX_FIX_CLOCK_SKEW_MS
+          ? Math.round(input.fixTimeMs)
+          : null
 
       const quality: LocationPointQuality =
         input.accuracy != null && input.accuracy > LOW_ACCURACY_THRESHOLD_METERS
@@ -367,7 +400,8 @@ export function useLiveTracking(
       const point: PendingPoint = {
         employeeId: employeeIdRef.current,
         trackingSessionId: sessionIdRef.current,
-        timestamp: Timestamp.now(),
+        timestamp: fixTimeMs != null ? Timestamp.fromMillis(fixTimeMs) : Timestamp.now(),
+        fixTimeMs,
         lat: input.lat,
         lng: input.lng,
         address: null,
@@ -417,6 +451,7 @@ export function useLiveTracking(
           // Device reports speed in m/s — convert to km/h for display consistency.
           speedKmh: coords.speed != null ? Math.round(coords.speed * 3.6 * 10) / 10 : null,
           direction: coords.heading ?? null,
+          fixTimeMs: position.timestamp ?? null,
         })
       },
       (error) => {
@@ -451,7 +486,7 @@ export function useLiveTracking(
     const interval =
       batteryPercent !== null && batteryPercent < LOW_BATTERY_THRESHOLD_PERCENT
         ? LOW_BATTERY_INTERVAL_MS
-        : BASE_INTERVAL_MS
+        : NATIVE_BASE_INTERVAL_MS
 
     await startNativeBackgroundTracking(
       interval,
@@ -462,6 +497,7 @@ export function useLiveTracking(
           accuracy: point.accuracy,
           speedKmh: point.speedKmh,
           direction: point.bearing,
+          fixTimeMs: point.timeMs,
         })
       },
       (error) => {
@@ -650,6 +686,61 @@ export function useLiveTracking(
     }
   }, [])
 
+  // Phase T2: subscribe to the server-maintained running distance for
+  // whichever session is current.
+  useEffect(() => {
+    if (!sessionId) return
+    try {
+      return subscribeToLiveSessionStats(sessionId, (stats) => {
+        setLiveDistanceKm(stats ? stats.liveDistanceKm : null)
+      })
+    } catch (error) {
+      console.warn('[useLiveTracking] Could not subscribe to live distance:', error)
+      return undefined
+    }
+  }, [sessionId])
+
+  // Phase T2 (web/PWA path only): the browser suspends this tab's timers
+  // when the screen sleeps, which leaves long gaps in the route. While
+  // tracking, (1) hold a Screen Wake Lock so the screen doesn't auto-sleep
+  // while the app is open, and (2) take a fix immediately whenever the app
+  // becomes visible again so the gap closes as soon as possible (the
+  // server then fills the gap with road distance — see roadDistance.ts).
+  useEffect(() => {
+    if (!isTracking || isNativeAndroid()) return
+    type WakeLockSentinelLike = { release: () => Promise<void> }
+    const nav = navigator as Navigator & {
+      wakeLock?: { request: (type: 'screen') => Promise<WakeLockSentinelLike> }
+    }
+    let sentinel: WakeLockSentinelLike | null = null
+    let disposed = false
+
+    const acquire = async () => {
+      if (!nav.wakeLock || document.visibilityState !== 'visible') return
+      try {
+        const s = await nav.wakeLock.request('screen')
+        if (disposed) void s.release()
+        else sentinel = s
+      } catch {
+        // Not supported / denied (e.g. battery saver) — tracking still works.
+      }
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void acquire()
+        void collectPoint()
+      }
+    }
+
+    void acquire()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      disposed = true
+      document.removeEventListener('visibilitychange', onVisibility)
+      if (sentinel) void sentinel.release()
+    }
+  }, [isTracking, collectPoint])
+
   return {
     isTracking,
     sessionId,
@@ -657,6 +748,7 @@ export function useLiveTracking(
     lastSyncAt,
     queuedCount,
     isFinalizingSync,
+    liveDistanceKm: sessionId ? liveDistanceKm : null,
     start,
     stop,
     resumeIfActive,

@@ -189,12 +189,12 @@ export default function EmployeeDashboardPage() {
   const buttonDisabled = loading || actionLoading
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <DashboardHeader />
       <EmployeeNavTabs />
 
       <main className="max-w-3xl mx-auto px-4 sm:px-6 pt-6 pb-24 sm:pb-6">
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
+        <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-6">
           <h1 className="text-lg font-semibold text-slate-800">
             Today's Attendance
           </h1>
@@ -220,30 +220,31 @@ export default function EmployeeDashboardPage() {
                 lastSyncAt={liveTracking.lastSyncAt}
                 queuedCount={liveTracking.queuedCount}
                 isFinalizingSync={liveTracking.isFinalizingSync}
+                liveDistanceKm={liveTracking.liveDistanceKm}
               />
             </div>
           )}
 
           <dl className="mt-6 grid grid-cols-2 gap-4">
-            <div className="rounded-lg bg-slate-50 px-4 py-3">
+            <div className="tilt-tile rounded-xl bg-white/70 border border-white/80 shadow-[0_8px_20px_-12px_rgba(49,46,129,0.35)] px-4 py-3">
               <dt className="text-xs text-slate-400">Punch In</dt>
               <dd className="mt-1 text-sm font-medium text-slate-700">
                 {punchInTimeLabel}
               </dd>
             </div>
-            <div className="rounded-lg bg-slate-50 px-4 py-3">
+            <div className="tilt-tile rounded-xl bg-white/70 border border-white/80 shadow-[0_8px_20px_-12px_rgba(49,46,129,0.35)] px-4 py-3">
               <dt className="text-xs text-slate-400">Punch Out</dt>
               <dd className="mt-1 text-sm font-medium text-slate-700">
                 {punchOutTimeLabel}
               </dd>
             </div>
-            <div className="rounded-lg bg-slate-50 px-4 py-3">
+            <div className="tilt-tile rounded-xl bg-white/70 border border-white/80 shadow-[0_8px_20px_-12px_rgba(49,46,129,0.35)] px-4 py-3">
               <dt className="text-xs text-slate-400">Working Hours</dt>
               <dd className="mt-1 text-sm font-medium text-slate-700">
                 {formatHours(displayedTotalHours)}
               </dd>
             </div>
-            <div className="rounded-lg bg-slate-50 px-4 py-3">
+            <div className="tilt-tile rounded-xl bg-white/70 border border-white/80 shadow-[0_8px_20px_-12px_rgba(49,46,129,0.35)] px-4 py-3">
               <dt className="text-xs text-slate-400">Overtime</dt>
               <dd className="mt-1 text-sm font-medium text-slate-700">
                 {formatHours(displayedOvertimeHours)}

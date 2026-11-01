@@ -9,8 +9,9 @@ import { getAllEmployees } from '@/services/employeeService'
 import {
   subscribeToActiveTrackingSessions,
   subscribeToLatestLocationPoint,
+  subscribeToLiveSessionStats,
 } from '@/services/trackingService'
-import type { Employee, LocationPoint, TrackingSession } from '@/types'
+import type { Employee, LiveSessionStats, LocationPoint, TrackingSession } from '@/types'
 import DashboardHeader from '@/components/DashboardHeader'
 import AdminNavTabs from '@/components/AdminNavTabs'
 
@@ -62,12 +63,17 @@ interface LiveMarker {
   lastUpdate: Date | null
   speed: number | null
   batteryPercent: number | null
+  /** Phase T2: running distance this shift (km), null until the server has processed a point. */
+  distanceKm: number | null
+  startedAt: Date | null
 }
 
 export default function AdminLiveTrackingPage() {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [activeSessions, setActiveSessions] = useState<TrackingSession[]>([])
   const [latestPoints, setLatestPoints] = useState<Record<string, LocationPoint | null>>({})
+  const [liveStats, setLiveStats] = useState<Record<string, LiveSessionStats | null>>({})
+  const [focusedSessionId, setFocusedSessionId] = useState<string | null>(null)
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -93,11 +99,15 @@ export default function AdminLiveTrackingPage() {
   // One live location subscription per active session, torn down as
   // sessions come and go rather than left to accumulate.
   useEffect(() => {
-    const unsubscribers = activeSessions.map((session) =>
+    const unsubscribers = activeSessions.flatMap((session) => [
       subscribeToLatestLocationPoint(session.id, (point) => {
         setLatestPoints((prev) => ({ ...prev, [session.id]: point }))
-      })
-    )
+      }),
+      // Phase T2: live running distance per shift.
+      subscribeToLiveSessionStats(session.id, (stats) => {
+        setLiveStats((prev) => ({ ...prev, [session.id]: stats }))
+      }),
+    ])
     return () => {
       unsubscribers.forEach((unsub) => unsub())
     }
@@ -126,17 +136,23 @@ export default function AdminLiveTrackingPage() {
           lastUpdate: point.timestamp?.toDate?.() ?? null,
           speed: point.speed,
           batteryPercent: point.batteryPercent,
+          distanceKm: liveStats[session.id]?.liveDistanceKm ?? null,
+          startedAt: session.startTime?.toDate?.() ?? null,
         }
       })
       .filter((m): m is LiveMarker => m !== null)
-  }, [activeSessions, latestPoints, employeeById])
+  }, [activeSessions, latestPoints, liveStats, employeeById])
 
+  const focusedMarker = markers.find((m) => m.sessionId === focusedSessionId) ?? markers[0] ?? null
+  const focusLat = focusedMarker?.lat
+  const focusLng = focusedMarker?.lng
   const mapCenter = useMemo<[number, number]>(() => {
-    if (markers.length > 0) return [markers[0].lat, markers[0].lng]
+    if (focusLat != null && focusLng != null) return [focusLat, focusLng]
     return FALLBACK_CENTER
-  }, [markers])
+  }, [focusLat, focusLng])
 
-  const mapZoom = markers.length > 0 ? 12 : 5
+  const mapZoom = markers.length > 0 ? (focusedSessionId ? 15 : 12) : 5
+  const totalLiveKm = markers.reduce((sum, m) => sum + (m.distanceKm ?? 0), 0)
 
   const headline = !sessionsLoaded
     ? 'Loading…'
@@ -145,7 +161,7 @@ export default function AdminLiveTrackingPage() {
       : `${activeSessions.length} employee${activeSessions.length === 1 ? '' : 's'} currently on a tracked shift`
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <DashboardHeader />
       <AdminNavTabs />
 
@@ -161,7 +177,7 @@ export default function AdminLiveTrackingPage() {
           </div>
         )}
 
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden">
+        <div className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden">
           {sessionsLoaded && activeSessions.length === 0 ? (
             <div className="text-center py-16">
               <svg className="mx-auto h-10 w-10 text-slate-300" viewBox="0 0 24 24" fill="none">
@@ -213,6 +229,9 @@ export default function AdminLiveTrackingPage() {
                         {m.batteryPercent !== null && (
                           <p className="text-xs text-slate-500">Battery: {m.batteryPercent}%</p>
                         )}
+                        <p className="mt-1 text-xs font-semibold text-indigo-600">
+                          Distance today: {m.distanceKm !== null ? `${m.distanceKm.toFixed(2)} km` : '—'}
+                        </p>
                       </div>
                     </Popup>
                   </Marker>
@@ -221,6 +240,53 @@ export default function AdminLiveTrackingPage() {
             </>
           )}
         </div>
+
+        {markers.length > 0 && (
+          <section className="card-3d rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-sm font-semibold text-slate-800">On the road now</h2>
+              <p className="text-xs text-slate-500">
+                Combined: <span className="font-semibold text-slate-700 tabular-nums">{totalLiveKm.toFixed(2)} km</span>
+              </p>
+            </div>
+            <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {markers.map((m) => (
+                <li key={m.sessionId}>
+                  <button
+                    type="button"
+                    onClick={() => setFocusedSessionId(m.sessionId)}
+                    className={`tilt-tile w-full text-left rounded-xl border px-4 py-3 transition ${
+                      focusedMarker?.sessionId === m.sessionId
+                        ? 'border-indigo-300 bg-indigo-50/70'
+                        : 'border-slate-200 bg-white/70 hover:border-indigo-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 truncate">{m.employeeName}</p>
+                        <p className="text-xs text-slate-400">{m.employeeCode}</p>
+                      </div>
+                      <p className="text-xl font-bold text-indigo-600 tabular-nums leading-none">
+                        {m.distanceKm !== null ? m.distanceKm.toFixed(1) : '—'}
+                        <span className="ml-0.5 text-xs font-semibold text-indigo-400">km</span>
+                      </p>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">
+                      {m.speed !== null ? `${Math.round(m.speed)} km/h · ` : ''}
+                      Updated{' '}
+                      {m.lastUpdate ? m.lastUpdate.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) : '—'}
+                      {m.batteryPercent !== null ? ` · Battery ${m.batteryPercent}%` : ''}
+                    </p>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-[11px] text-slate-400">
+              Live distance is a running GPS total. The final figure is calculated at punch-out with road-distance
+              correction, so it can come out slightly higher.
+            </p>
+          </section>
+        )}
       </main>
     </div>
   )
